@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and tipping statistics",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "totalPoints": { "type": "number" },
+        "totalMargin": { "type": "number" },
+        "unlockedRounds": { "type": "array", "items": { "type": "number" } }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Game": {
+      "title": "Game",
+      "description": "AFL game data cached from Squiggle",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "round": { "type": "number" },
+        "year": { "type": "number" },
+        "hometeam": { "type": "string" },
+        "awayteam": { "type": "string" },
+        "date": { "type": "string" },
+        "venue": { "type": "string" },
+        "winner": { "type": "string" },
+        "hscore": { "type": "number" },
+        "ascore": { "type": "number" },
+        "isFirstInRound": { "type": "boolean" },
+        "isFinished": { "type": "boolean" }
+      },
+      "required": ["id", "round", "hometeam", "awayteam", "date"]
+    },
+    "Tip": {
+      "title": "Tip",
+      "description": "A user's tip for a specific game",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "gameId": { "type": "number" },
+        "round": { "type": "number" },
+        "selectedTeam": { "type": "string" },
+        "margin": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "gameId", "round", "selectedTeam"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "Cached AFL games"
+    },
+    "/tips/{tipId}": {
+      "schema": "Tip",
+      "description": "User tips (tipId is usually uid_gameId)"
+    }
+  }
+}

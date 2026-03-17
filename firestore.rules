@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Fields:
+    //   - uid: string (required)
+    //   - displayName: string
+    //   - email: string (required)
+    //   - role: string (admin/user)
+    //   - totalPoints: number
+    //   - totalMargin: number
+    //   - unlockedRounds: list (numbers)
+    //
+    // Collection: games
+    // Fields:
+    //   - id: number (required)
+    //   - round: number
+    //   - winner: string
+    //   - isFinished: bool
+    //   ... (Squiggle API fields)
+    //
+    // Collection: tips
+    // Fields:
+    //   - uid: string (required)
+    //   - gameId: number (required)
+    //   - round: number
+    //   - selectedTeam: string
+    //   - margin: number (optional)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        (request.auth.token.email == "acaback@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['admin', 'user'];
+    }
+
+    function isValidTip(data) {
+      return data.keys().hasAll(['uid', 'gameId', 'round', 'selectedTeam']) &&
+             data.gameId is number &&
+             data.round is number &&
+             data.selectedTeam is string &&
+             (!('margin' in data) || data.margin is number);
+    }
+
+    // Rules
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role);
+    }
+
+    match /games/{gameId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /tips/{tipId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTip(request.resource.data) && (request.resource.data.uid == request.auth.uid || isAdmin());
+      allow update: if isAdmin() || (
+        isAuthenticated() && 
+        resource.data.uid == request.auth.uid && 
+        isValidTip(request.resource.data) &&
+        request.resource.data.uid == resource.data.uid
+      );
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+    }
+  }
+}
