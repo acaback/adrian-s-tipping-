@@ -48,12 +48,47 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "gameId", "round", "selectedTeam"]
+    },
+    "PublicProfile": {
+      "title": "PublicProfile",
+      "description": "Non-sensitive user profile data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "totalPoints": { "type": "number" },
+        "totalMargin": { "type": "number" },
+        "favoriteTeam": { "type": "string" }
+      },
+      "required": ["uid", "displayName", "role"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "AFL Team data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string" },
+        "abbrev": { "type": "string" },
+        "logo": { "type": "string" }
+      },
+      "required": ["id", "name", "abbrev"]
     }
   },
   "firestore": {
     "/users/{uid}": {
       "schema": "User",
       "description": "User profiles"
+    },
+    "/public_profiles/{uid}": {
+      "schema": "PublicProfile",
+      "description": "Public user profiles"
+    },
+    "/teams/{teamId}": {
+      "schema": "Team",
+      "description": "AFL Teams"
     },
     "/games/{gameId}": {
       "schema": "Game",

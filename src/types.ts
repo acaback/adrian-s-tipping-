@@ -21,6 +21,22 @@ export interface UserProfile {
   totalPoints: number;
   totalMargin: number;
   unlockedRounds?: number[];
+  favoriteTeam?: string;
+  preferences?: {
+    emailNotifications?: boolean;
+    weeklySummary?: boolean;
+    darkMode?: boolean;
+  };
+}
+
+export interface PublicProfile {
+  uid: string;
+  displayName: string;
+  email?: string;
+  role: 'admin' | 'user';
+  totalPoints: number;
+  totalMargin: number;
+  favoriteTeam?: string;
 }
 
 export interface Tip {
@@ -31,6 +47,13 @@ export interface Tip {
   selectedTeam: string;
   margin?: number;
   updatedAt: string;
+}
+
+export interface Team {
+  id: number;
+  name: string;
+  abbrev: string;
+  logo?: string;
 }
 
 export interface RoundStatus {

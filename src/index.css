@@ -3,6 +3,12 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-afl-navy: #001D49;
+  --color-afl-red: #E21E31;
+  --color-afl-gold: #FFB800;
+  --color-afl-accent: #008AAB; /* A nice teal/cyan from Port Adelaide/AFL style */
+  
+  --variant-dark: :where(.dark, .dark *);
 }
 
 :root {
