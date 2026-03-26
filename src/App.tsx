@@ -551,7 +551,7 @@ export default function App() {
     // Check if locked
     const isLocked = new Date() > new Date(game.date) && !profile?.unlockedRounds?.includes(round);
     if (isLocked && profile?.role !== 'admin') {
-      setError("This game is already locked!");
+      setError("This game has already started and tips are locked.");
       return;
     }
 
@@ -664,14 +664,15 @@ export default function App() {
     const targetUserTips = allTips.filter(t => t.uid === targetUserId);
     
     return roundsList.map(r => {
-      const roundGames = games.filter(g => g.round === r && g.isFinished);
+      const allRoundGames = games.filter(g => g.round === r);
+      const finishedRoundGames = allRoundGames.filter(g => g.isFinished);
       const roundTips = targetUserTips.filter(t => t.round === r);
       
       let correct = 0;
       let points = 0;
       let marginError = 0;
       
-      roundGames.forEach(game => {
+      finishedRoundGames.forEach(game => {
         const tip = roundTips.find(t => t.gameId === game.id);
         if (tip) {
           const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
@@ -693,7 +694,8 @@ export default function App() {
         correct,
         points,
         marginError,
-        totalGames: roundGames.length
+        totalGames: allRoundGames.length,
+        finishedGames: finishedRoundGames.length
       };
     }).filter(r => r.totalGames > 0);
   }, [resultsUserId, user, games, allTips]);
@@ -1437,7 +1439,7 @@ export default function App() {
                     <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
                       {/* Home Team */}
                       <button 
-                        disabled={isLocked || savingTipId === game.id}
+                        disabled={savingTipId === game.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           saveTip(game.id, game.round, game.hometeam, gameTip?.margin);
@@ -1455,7 +1457,6 @@ export default function App() {
                             ? "bg-stone-50 dark:bg-stone-800/50 ring-2 ring-offset-2 dark:ring-offset-stone-900" 
                             : "bg-white dark:bg-stone-800 border-stone-100 dark:border-stone-700 hover:border-stone-200 dark:hover:border-stone-600",
                           gameTip?.selectedTeam === game.hometeam && "ring-afl-accent/20",
-                          isLocked && "cursor-default opacity-80",
                           savingTipId === game.id && "opacity-50"
                         )}
                       >
@@ -1487,7 +1488,6 @@ export default function App() {
                             <label className="block text-[10px] text-center uppercase font-bold text-stone-400 mb-2">Winning Margin</label>
                             <input 
                               type="number"
-                              disabled={isLocked}
                               placeholder="Pts"
                               value={gameTip?.margin || ''}
                               onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1510,7 +1510,7 @@ export default function App() {
 
                       {/* Away Team */}
                       <button 
-                        disabled={isLocked || savingTipId === game.id}
+                        disabled={savingTipId === game.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           saveTip(game.id, game.round, game.awayteam, gameTip?.margin);
@@ -1528,7 +1528,6 @@ export default function App() {
                             ? "bg-stone-50 dark:bg-stone-800/50 ring-2 ring-offset-2 dark:ring-offset-stone-900" 
                             : "bg-white dark:bg-stone-800 border-stone-100 dark:border-stone-700 hover:border-stone-200 dark:hover:border-stone-600",
                           gameTip?.selectedTeam === game.awayteam && "ring-afl-accent/20",
-                          isLocked && "cursor-default opacity-80",
                           savingTipId === game.id && "opacity-50"
                         )}
                       >
@@ -1983,7 +1982,7 @@ export default function App() {
                     <tbody>
                       {userResults.map((r) => {
                         const isExpanded = expandedResultsRound === r.round;
-                        const roundGames = games.filter(g => g.round === r.round && g.isFinished);
+                        const roundGames = games.filter(g => g.round === r.round);
                         const targetUserId = resultsUserId || user?.uid;
                         const roundTips = allTips.filter(t => t.uid === targetUserId && t.round === r.round);
 
@@ -2000,9 +1999,12 @@ export default function App() {
                                   ) : (
                                     <ChevronDown className="w-5 h-5 text-stone-300 group-hover:text-afl-accent transition-colors" />
                                   )}
-                                  <span className="font-serif italic text-xl text-stone-300 dark:text-stone-700 group-hover:text-stone-900 dark:group-hover:text-stone-100 transition-colors">
-                                    Round {r.round < 10 ? `0${r.round}` : r.round}
-                                  </span>
+                                  <div>
+                                    <p className="font-bold text-stone-900 dark:text-stone-100">{getRoundLabel(r.round)}</p>
+                                    <p className="text-[10px] text-stone-400 uppercase tracking-tighter">
+                                      {r.finishedGames === r.totalGames ? 'Completed' : r.finishedGames > 0 ? 'In Progress' : 'Upcoming'}
+                                    </p>
+                                  </div>
                                 </div>
                               </td>
                               <td className="px-8 py-6 text-center">
@@ -2020,67 +2022,78 @@ export default function App() {
                                 <td colSpan={4} className="px-8 py-0 bg-stone-50/30 dark:bg-stone-900/30 border-b border-stone-100 dark:border-stone-800">
                                   <div className="py-6 space-y-4">
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                      {roundGames.map(game => {
-                                        const tip = roundTips.find(t => t.gameId === game.id);
-                                        const isCorrect = tip && game.winner === tip.selectedTeam;
-                                        const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
-                                        
-                                        return (
-                                          <div key={game.id} className="bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-2xl p-4 shadow-sm">
-                                            <div className="flex items-center justify-between mb-3">
-                                              <span className="text-[10px] uppercase tracking-widest text-stone-400 font-mono">
-                                                {game.venue}
-                                              </span>
-                                              {tip ? (
-                                                isCorrect ? (
-                                                  <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-tighter">
-                                                    <CheckCircle2 className="w-3 h-3" /> Correct
-                                                  </div>
+                                        {roundGames.map(game => {
+                                          const tip = roundTips.find(t => t.gameId === game.id);
+                                          const isCorrect = tip && game.winner === tip.selectedTeam;
+                                          const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+                                          const isUpcoming = !game.isFinished && new Date(game.date) > new Date();
+                                          const isInProgress = !game.isFinished && new Date(game.date) <= new Date();
+                                          
+                                          return (
+                                            <div key={game.id} className="bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-2xl p-4 shadow-sm">
+                                              <div className="flex items-center justify-between mb-3">
+                                                <span className="text-[10px] uppercase tracking-widest text-stone-400 font-mono">
+                                                  {game.venue} • {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE h:mm a')}
+                                                </span>
+                                                {game.isFinished ? (
+                                                  tip ? (
+                                                    isCorrect ? (
+                                                      <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-tighter">
+                                                        <CheckCircle2 className="w-3 h-3" /> Correct
+                                                      </div>
+                                                    ) : (
+                                                      <div className="flex items-center gap-1 text-afl-accent text-[10px] font-bold uppercase tracking-tighter">
+                                                        <XCircle className="w-3 h-3" /> Incorrect
+                                                      </div>
+                                                    )
+                                                  ) : (
+                                                    <span className="text-stone-300 dark:text-stone-600 text-[10px] font-bold uppercase tracking-tighter">No Tip</span>
+                                                  )
                                                 ) : (
-                                                  <div className="flex items-center gap-1 text-afl-accent text-[10px] font-bold uppercase tracking-tighter">
-                                                    <XCircle className="w-3 h-3" /> Incorrect
-                                                  </div>
-                                                )
-                                              ) : (
-                                                <span className="text-stone-300 dark:text-stone-600 text-[10px] font-bold uppercase tracking-tighter">No Tip</span>
-                                              )}
-                                            </div>
-                                            
-                                            <div className="flex items-center justify-between gap-4">
-                                              <div className="flex-1 space-y-2">
-                                                <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.hteam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
-                                                  <span className={`text-sm font-bold ${game.winner === game.hteam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
-                                                    {game.hteam}
+                                                  <span className={cn(
+                                                    "text-[10px] font-bold uppercase tracking-tighter",
+                                                    isInProgress ? "text-afl-gold animate-pulse" : "text-stone-400"
+                                                  )}>
+                                                    {isInProgress ? "In Progress" : "Upcoming"}
                                                   </span>
-                                                  <span className="text-sm font-mono font-bold">{game.hscore}</span>
-                                                </div>
-                                                <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.ateam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
-                                                  <span className={`text-sm font-bold ${game.winner === game.ateam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
-                                                    {game.ateam}
-                                                  </span>
-                                                  <span className="text-sm font-mono font-bold">{game.ascore}</span>
-                                                </div>
-                                              </div>
-                                              
-                                              <div className="text-right border-l border-stone-100 dark:border-stone-700 pl-4 min-w-[80px]">
-                                                <p className="text-[10px] uppercase tracking-widest text-stone-400 font-mono mb-1">Tip</p>
-                                                <p className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate max-w-[100px]">
-                                                  {tip?.selectedTeam || '—'}
-                                                </p>
-                                                {game.isFirstInRound && tip?.margin !== undefined && (
-                                                  <div className="mt-2 pt-2 border-t border-stone-50 dark:border-stone-700">
-                                                    <p className="text-[10px] uppercase tracking-widest text-stone-400 font-mono mb-1">Margin</p>
-                                                    <div className="flex flex-col">
-                                                      <span className="text-xs font-bold text-stone-900 dark:text-stone-100">Tip: {tip.margin}</span>
-                                                      <span className="text-[10px] text-stone-500 dark:text-stone-400">Actual: {actualMargin}</span>
-                                                    </div>
-                                                  </div>
                                                 )}
                                               </div>
+                                              
+                                              <div className="flex items-center justify-between gap-4">
+                                                <div className="flex-1 space-y-2">
+                                                  <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.hteam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
+                                                    <span className={`text-sm font-bold ${game.winner === game.hteam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
+                                                      {game.hteam}
+                                                    </span>
+                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold">{game.hscore}</span>}
+                                                  </div>
+                                                  <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.ateam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
+                                                    <span className={`text-sm font-bold ${game.winner === game.ateam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
+                                                      {game.ateam}
+                                                    </span>
+                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold">{game.ascore}</span>}
+                                                  </div>
+                                                </div>
+                                                
+                                                <div className="text-right border-l border-stone-100 dark:border-stone-700 pl-4 min-w-[80px]">
+                                                  <p className="text-[10px] uppercase tracking-widest text-stone-400 font-mono mb-1">Tip</p>
+                                                  <p className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate max-w-[100px]">
+                                                    {tip?.selectedTeam || '—'}
+                                                  </p>
+                                                  {game.isFirstInRound && tip?.margin !== undefined && (
+                                                    <div className="mt-2 pt-2 border-t border-stone-50 dark:border-stone-700">
+                                                      <p className="text-[10px] uppercase tracking-widest text-stone-400 font-mono mb-1">Margin</p>
+                                                      <div className="flex flex-col">
+                                                        <span className="text-xs font-bold text-stone-900 dark:text-stone-100">Tip: {tip.margin}</span>
+                                                        {game.isFinished && <span className="text-[10px] text-stone-500 dark:text-stone-400">Actual: {actualMargin}</span>}
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
                                             </div>
-                                          </div>
-                                        );
-                                      })}
+                                          );
+                                        })}
                                     </div>
                                   </div>
                                 </td>
