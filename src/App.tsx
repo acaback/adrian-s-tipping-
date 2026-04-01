@@ -52,8 +52,16 @@ import {
   Moon,
   Sun,
   Mail,
+  X,
   XCircle,
-  Trash2
+  Trash2,
+  Star,
+  LayoutGrid,
+  Shield,
+  Plus,
+  Minus,
+  Copy,
+  Check
 } from 'lucide-react';
 import { format, isAfter, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -69,25 +77,42 @@ const AWST_TIMEZONE = 'Australia/Perth';
 
 const AFL_TEAM_COLORS: Record<string, string> = {
   'Adelaide': '#002B5C',
+  'Adelaide Crows': '#002B5C',
   'Brisbane': '#730040',
   'Brisbane Lions': '#730040',
   'Carlton': '#031A29',
+  'Carlton Blues': '#031A29',
   'Collingwood': '#000000',
+  'Collingwood Magpies': '#000000',
   'Essendon': '#CC2031',
+  'Essendon Bombers': '#CC2031',
   'Fremantle': '#2A0D54',
+  'Fremantle Dockers': '#2A0D54',
   'Geelong': '#1C3C63',
+  'Geelong Cats': '#1C3C63',
   'Gold Coast': '#E11B05',
+  'Gold Coast Suns': '#E11B05',
   'GWS': '#F15C22',
+  'GWS Giants': '#F15C22',
   'Greater Western Sydney': '#F15C22',
   'Hawthorn': '#4D2004',
+  'Hawthorn Hawks': '#4D2004',
   'Melbourne': '#0F1131',
+  'Melbourne Demons': '#0F1131',
   'North Melbourne': '#003690',
+  'North Melbourne Kangaroos': '#003690',
   'Port Adelaide': '#008AAB',
+  'Port Adelaide Power': '#008AAB',
   'Richmond': '#FFCC33',
+  'Richmond Tigers': '#FFCC33',
   'St Kilda': '#ED0F05',
+  'St Kilda Saints': '#ED0F05',
   'Sydney': '#ED171F',
+  'Sydney Swans': '#ED171F',
   'West Coast': '#002C73',
-  'Western Bulldogs': '#014896'
+  'West Coast Eagles': '#002C73',
+  'Western Bulldogs': '#014896',
+  'Western Bulldogs Bulldogs': '#014896'
 };
 
 const ADMIN_EMAIL = "acaback@gmail.com";
@@ -185,22 +210,30 @@ export default function App() {
   const [expandedResultsRound, setExpandedResultsRound] = useState<number | null>(null);
   const [hoveredGameId, setHoveredGameId] = useState<number | null>(null);
   
+  // Sorting State
+  const [leaderboardSort, setLeaderboardSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'points', direction: 'desc' });
+  const [resultsIndividualSort, setResultsIndividualSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'round', direction: 'desc' });
+  const [resultsRoundSummarySort, setResultsRoundSummarySort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'points', direction: 'desc' });
+
   // Admin User Management State
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserRole, setNewUserRole] = useState<'user' | 'admin'>('user');
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUserName, setEditingUserName] = useState('');
   const [editingUserFavoriteTeam, setEditingUserFavoriteTeam] = useState('');
+  const [editingUserRole, setEditingUserRole] = useState<'user' | 'admin'>('user');
   const [isEditingSelf, setIsEditingSelf] = useState(false);
   const [selfDisplayName, setSelfDisplayName] = useState('');
   const [selfFavoriteTeam, setSelfFavoriteTeam] = useState('');
   const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('theme') === 'dark' || 
-        (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme) return savedTheme === 'dark';
+      return true; // Default to night mode
     }
-    return false;
+    return true;
   });
 
   // Email/Password Auth State
@@ -214,6 +247,116 @@ export default function App() {
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [isFetchingGames, setIsFetchingGames] = useState(true);
   const [isFetchingStandings, setIsFetchingStandings] = useState(true);
+
+  const [isRoundRecapOpen, setIsRoundRecapOpen] = useState(false);
+  const [recapRound, setRecapRound] = useState<number>(currentRound);
+  const [isCopied, setIsCopied] = useState(false);
+
+  const generateRoundRecap = (round: number) => {
+    const roundGames = games.filter(g => g.round === round && g.isFinished);
+    if (roundGames.length === 0) return "No finished games for this round yet.";
+
+    const roundTips = allTips.filter(t => {
+      const g = games.find(game => game.id === t.gameId);
+      return g && g.round === round;
+    });
+
+    const roundStats = allUsers.map(user => {
+      const userTips = roundTips.filter(t => t.uid === user.uid);
+      let correct = 0;
+      let points = 0;
+      let marginError = 0;
+
+      userTips.forEach(tip => {
+        const game = roundGames.find(g => g.id === tip.gameId);
+        if (game) {
+          const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+          if (game.winner === tip.selectedTeam) {
+            correct += 1;
+            points += 1;
+            if (game.isFirstInRound && tip.margin !== undefined) {
+              if (tip.margin === actualMargin) points += 1;
+              marginError += Math.abs(tip.margin - actualMargin);
+            }
+          } else if (game.isFirstInRound && tip.margin !== undefined) {
+            marginError += Math.abs(tip.margin - actualMargin);
+          }
+        }
+      });
+
+      return { ...user, correct, points, marginError };
+    }).sort((a, b) => b.points - a.points || a.marginError - b.marginError);
+
+    const winners = roundGames.map(g => {
+      const winnerName = g.winner === g.hometeam ? g.hometeam : g.awayteam;
+      const winnerScore = g.winner === g.hometeam ? g.hscore : g.ascore;
+      const loserName = g.winner === g.hometeam ? g.awayteam : g.hometeam;
+      const loserScore = g.winner === g.hometeam ? g.ascore : g.hscore;
+      const margin = (winnerScore || 0) - (loserScore || 0);
+      return `• ${winnerName} (${winnerScore}) def. ${loserName} (${loserScore}) by ${margin}`;
+    }).join('\n');
+
+    const topPerformers = roundStats.slice(0, 3).map((u, i) => 
+      `${i + 1}. ${u.displayName} - ${u.points} pts (${u.correct} correct)`
+    ).join('\n');
+
+    const closestGame = roundGames.reduce((prev, curr) => {
+      const prevMargin = Math.abs((prev.hscore || 0) - (prev.ascore || 0));
+      const currMargin = Math.abs((curr.hscore || 0) - (curr.ascore || 0));
+      return currMargin < prevMargin ? curr : prev;
+    });
+
+    const biggestWin = roundGames.reduce((prev, curr) => {
+      const prevMargin = Math.abs((prev.hscore || 0) - (prev.ascore || 0));
+      const currMargin = Math.abs((curr.hscore || 0) - (curr.ascore || 0));
+      return currMargin > prevMargin ? curr : prev;
+    });
+
+    const lastPlace = roundStats[roundStats.length - 1];
+    const woodenSpooners = roundStats.filter(u => u.points === lastPlace.points && u.marginError === lastPlace.marginError);
+    const woodenSpoonNames = woodenSpooners.map(u => u.displayName).join(', ');
+
+    const funnyAnecdotes = [
+      "Better luck next time! Maybe try flipping a coin?",
+      "Is the ladder upside down? Because you're on top of that one!",
+      "A bold strategy, Cotton. Let's see if it pays off for them next round.",
+      "You're just giving everyone else a head start, right?",
+      "The only way is up from here! (Hopefully)",
+      "Maybe stick to watching the Auskick at halftime?",
+      "Your tips were as accurate as a full-back taking a shot from 50m out on the boundary.",
+      "Did you let your pet goldfish pick these?",
+      "Consistency is key, and you're consistently... well, you know.",
+      "At least you're consistent! Consistently wrong, but consistent nonetheless."
+    ];
+    const anecdote = funnyAnecdotes[Math.floor(Math.random() * funnyAnecdotes.length)];
+
+    return `🏆 ROUND ${round} RECAP 🏆
+
+🔥 RESULTS:
+${winners}
+
+🌟 TOP PERFORMERS:
+${topPerformers}
+
+🎯 MARGIN MASTER:
+${roundStats.sort((a, b) => a.marginError - b.marginError)[0]?.displayName} (Error: ${roundStats.sort((a, b) => a.marginError - b.marginError)[0]?.marginError})
+
+⚡️ HIGHLIGHTS:
+• Closest Game: ${closestGame.hometeam} vs ${closestGame.awayteam} (${Math.abs((closestGame.hscore || 0) - (closestGame.ascore || 0))} pts)
+• Biggest Win: ${biggestWin.winner} (+${Math.abs((biggestWin.hscore || 0) - (biggestWin.ascore || 0))} pts)
+
+🥄 WOODEN SPOON:
+${woodenSpoonNames}
+"${anecdote}"
+
+Good luck in Round ${round + 1}! 🍀`;
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
 
   useEffect(() => {
     if (profile) {
@@ -311,13 +454,26 @@ export default function App() {
             preferences: {
               emailNotifications: true,
               weeklySummary: true,
-              darkMode: false
+              darkMode: true
             }
           };
           await setDoc(userRef, currentProfile);
         }
       } else {
         currentProfile = userSnap.data() as UserProfile;
+        // Ensure role is set and admin role is correct for designated email
+        let needsUpdate = false;
+        if (firebaseUser.email === ADMIN_EMAIL && currentProfile.role !== 'admin') {
+          currentProfile.role = 'admin';
+          needsUpdate = true;
+        } else if (!currentProfile.role) {
+          currentProfile.role = 'user';
+          needsUpdate = true;
+        }
+        
+        if (needsUpdate) {
+          await updateDoc(userRef, { role: currentProfile.role });
+        }
       }
 
       // Always update public profile
@@ -378,47 +534,75 @@ export default function App() {
   };
 
   // Fetch Games from Squiggle
-  useEffect(() => {
-    const fetchGames = async () => {
-      setIsFetchingGames(true);
-      try {
-        const res = await fetch("https://api.squiggle.com.au/?q=games&year=2026");
-        const data = await res.json();
-        const rawGames: any[] = data.games;
-        
-        // Process games and identify first game of each round
-        const processedGames: Game[] = rawGames.map(g => ({
+  const fetchGames = async (isInitial = true) => {
+    if (isInitial) setIsFetchingGames(true);
+    try {
+      console.log("Fetching AFL games for 2026...");
+      const res = await fetch("/api/games?year=2026");
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server responded with status: ${res.status}`);
+      }
+      
+      const data = await res.json();
+      const rawGames: any[] = data.games || [];
+      console.log(`Fetched ${rawGames.length} raw games.`);
+      
+      if (rawGames.length === 0 && isInitial) {
+        console.warn("No AFL games found in response.");
+        setError("No AFL games found for 2026. Please check back later.");
+        return;
+      }
+      
+      // Clear error if we successfully got games
+      setError(null);
+      
+      // Process games and identify first game of each round
+      const processedGames: Game[] = rawGames
+        .filter(g => g.unixtime && !isNaN(Number(g.unixtime)))
+        .map(g => ({
           id: g.id,
           round: g.round,
           year: g.year,
           hometeam: g.hteam,
           awayteam: g.ateam,
-          date: new Date(g.unixtime * 1000).toISOString(),
+          date: new Date(Number(g.unixtime) * 1000).toISOString(),
           venue: g.venue,
           winner: g.winner,
           hscore: g.hscore,
           ascore: g.ascore,
-          isFinished: g.complete === 100
+          isFinished: g.complete === 100,
+          timestr: g.timestr,
+          complete: g.complete
         }));
 
-        // Sort by date to find first game of round
-        processedGames.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-        
-        const roundFirstGames = new Map<number, number>();
-        processedGames.forEach(g => {
-          if (!roundFirstGames.has(g.round)) {
-            roundFirstGames.set(g.round, g.id);
-          }
-        });
+      if (processedGames.length === 0 && isInitial) {
+        console.warn("No valid AFL games after processing.");
+        setError("No valid AFL games found. Please check back later.");
+        return;
+      }
 
-        const finalGames = processedGames.map(g => ({
-          ...g,
-          isFirstInRound: roundFirstGames.get(g.round) === g.id
-        }));
+      // Sort by date to find first game of round
+      processedGames.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      
+      const roundFirstGames = new Map<number, number>();
+      processedGames.forEach(g => {
+        if (!roundFirstGames.has(g.round)) {
+          roundFirstGames.set(g.round, g.id);
+        }
+      });
 
-        setGames(finalGames);
+      const finalGames = processedGames.map(g => ({
+        ...g,
+        isFirstInRound: roundFirstGames.get(g.round) === g.id
+      }));
 
-        // Determine current round based on date
+      setGames(finalGames);
+      console.log(`Successfully set ${finalGames.length} games.`);
+
+      // Determine current round based on date (only on initial fetch)
+      if (isInitial) {
         const now = new Date();
         const upcomingGame = finalGames.find(g => new Date(g.date) > now);
         if (upcomingGame) {
@@ -426,46 +610,60 @@ export default function App() {
         } else {
           setCurrentRound(Math.max(...finalGames.map(g => g.round)));
         }
-      } catch (err) {
-        console.error("Failed to fetch games:", err);
-        setError("Could not load AFL games. Please try again later.");
-      } finally {
-        setIsFetchingGames(false);
       }
-    };
+    } catch (err) {
+      console.error("Failed to fetch games:", err);
+      if (isInitial) setError(`Could not load AFL games: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      if (isInitial) setIsFetchingGames(false);
+    }
+  };
 
-    fetchGames();
-  }, []);
+  const fetchStandings = async () => {
+    setIsFetchingStandings(true);
+    try {
+      console.log("Fetching AFL standings for 2026...");
+      const res = await fetch("/api/standings?year=2026");
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server responded with status: ${res.status}`);
+      }
+      
+      const data = await res.json();
+      const rawStandings: any[] = data.standings || [];
+      console.log(`Fetched ${rawStandings.length} raw standings.`);
+      
+      const processedStandings: StandingsItem[] = rawStandings.map(s => ({
+        rank: s.rank,
+        name: s.name,
+        played: s.played,
+        wins: s.wins,
+        losses: s.losses,
+        draws: s.draws,
+        pts: s.pts,
+        percentage: s.percentage
+      }));
 
-  // Fetch Standings from Squiggle
+      setStandings(processedStandings);
+      console.log(`Successfully set ${processedStandings.length} standings.`);
+    } catch (err) {
+      console.error("Failed to fetch standings:", err);
+    } finally {
+      setIsFetchingStandings(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchStandings = async () => {
-      setIsFetchingStandings(true);
-      try {
-        const res = await fetch("https://api.squiggle.com.au/?q=standings&year=2026");
-        const data = await res.json();
-        const rawStandings: any[] = data.standings;
-        
-        const processedStandings: StandingsItem[] = rawStandings.map(s => ({
-          rank: s.rank,
-          name: s.name,
-          played: s.played,
-          wins: s.wins,
-          losses: s.losses,
-          draws: s.draws,
-          pts: s.pts,
-          percentage: s.percentage
-        }));
-
-        setStandings(processedStandings);
-      } catch (err) {
-        console.error("Failed to fetch standings:", err);
-      } finally {
-        setIsFetchingStandings(false);
-      }
-    };
-
+    fetchGames(true);
     fetchStandings();
+
+    // Poll for score updates every 60 seconds
+    const intervalId = setInterval(() => {
+      fetchGames(false);
+    }, 60000);
+
+    return () => clearInterval(intervalId);
   }, []);
 
   // Listen for Tips
@@ -490,8 +688,10 @@ export default function App() {
     const usersPath = profile.role === 'admin' ? 'users' : 'public_profiles';
     const unsubUsers = onSnapshot(collection(db, usersPath), (snapshot) => {
       const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+      console.log(`Fetched ${users.length} users from ${usersPath}`);
       setAllUsers(users.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')));
     }, (error) => {
+      console.error(`Failed to fetch users from ${usersPath}:`, error);
       handleFirestoreError(error, OperationType.LIST, usersPath);
     });
 
@@ -610,13 +810,49 @@ export default function App() {
       } as LeaderboardItem;
     });
 
-    return data.sort((a, b) => {
+    // First, sort by default rank to assign ranks
+    const rankedData = [...data].sort((a, b) => {
       if (b.calculatedPoints !== a.calculatedPoints) {
         return b.calculatedPoints - a.calculatedPoints;
       }
       return a.calculatedMargin - b.calculatedMargin;
+    }).map((item, index) => ({ ...item, rank: index + 1 }));
+
+    // Apply sorting
+    return rankedData.sort((a, b) => {
+      let valA: any;
+      let valB: any;
+
+      switch (leaderboardSort.key) {
+        case 'displayName':
+          valA = a.displayName.toLowerCase();
+          valB = b.displayName.toLowerCase();
+          break;
+        case 'points':
+          valA = a.calculatedPoints;
+          valB = b.calculatedPoints;
+          break;
+        case 'marginError':
+          valA = a.calculatedMargin;
+          valB = b.calculatedMargin;
+          break;
+        case 'rank':
+        default:
+          valA = a.rank;
+          valB = b.rank;
+          break;
+      }
+
+      if (valA < valB) return leaderboardSort.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return leaderboardSort.direction === 'asc' ? 1 : -1;
+      
+      // Secondary sort for stability
+      if (leaderboardSort.key !== 'points') {
+        if (a.calculatedPoints !== b.calculatedPoints) return b.calculatedPoints - a.calculatedPoints;
+      }
+      return a.calculatedMargin - b.calculatedMargin;
     });
-  }, [allUsers, allTips, games]);
+  }, [allUsers, allTips, games, leaderboardSort]);
 
   const roundSummaryData = useMemo(() => {
     const data = allUsers.map(u => {
@@ -650,11 +886,52 @@ export default function App() {
       };
     });
 
-    return data.sort((a, b) => {
-      if (b.points !== a.points) return b.points - a.points;
+    // First, sort by default rank to assign ranks
+    const rankedData = [...data].sort((a, b) => {
+      if (b.points !== a.points) {
+        return b.points - a.points;
+      }
+      return a.marginError - b.marginError;
+    }).map((item, index) => ({ ...item, rank: index + 1 }));
+
+    // Apply sorting
+    return rankedData.sort((a, b) => {
+      let valA: any;
+      let valB: any;
+
+      switch (resultsRoundSummarySort.key) {
+        case 'displayName':
+          valA = a.displayName.toLowerCase();
+          valB = b.displayName.toLowerCase();
+          break;
+        case 'correct':
+          valA = a.correct;
+          valB = b.correct;
+          break;
+        case 'points':
+          valA = a.points;
+          valB = b.points;
+          break;
+        case 'marginError':
+          valA = a.marginError;
+          valB = b.marginError;
+          break;
+        case 'rank':
+        default:
+          valA = a.rank;
+          valB = b.rank;
+          break;
+      }
+
+      if (valA < valB) return resultsRoundSummarySort.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return resultsRoundSummarySort.direction === 'asc' ? 1 : -1;
+      
+      if (resultsRoundSummarySort.key !== 'points') {
+        if (a.points !== b.points) return b.points - a.points;
+      }
       return a.marginError - b.marginError;
     });
-  }, [allUsers, allTips, games, resultsSelectedRound]);
+  }, [allUsers, allTips, games, resultsSelectedRound, resultsRoundSummarySort]);
 
   const userResults = useMemo(() => {
     const targetUserId = resultsUserId || user?.uid;
@@ -663,7 +940,7 @@ export default function App() {
     const roundsList = Array.from(new Set(games.map(g => g.round))).sort((a: any, b: any) => a - b);
     const targetUserTips = allTips.filter(t => t.uid === targetUserId);
     
-    return roundsList.map(r => {
+    const data = roundsList.map(r => {
       const allRoundGames = games.filter(g => g.round === r);
       const finishedRoundGames = allRoundGames.filter(g => g.isFinished);
       const roundTips = targetUserTips.filter(t => t.round === r);
@@ -698,7 +975,58 @@ export default function App() {
         finishedGames: finishedRoundGames.length
       };
     }).filter(r => r.totalGames > 0);
-  }, [resultsUserId, user, games, allTips]);
+
+    // Apply sorting
+    return [...data].sort((a, b) => {
+      let valA: any;
+      let valB: any;
+
+      switch (resultsIndividualSort.key) {
+        case 'round':
+          valA = a.round;
+          valB = b.round;
+          break;
+        case 'correct':
+          valA = a.correct;
+          valB = b.correct;
+          break;
+        case 'points':
+          valA = a.points;
+          valB = b.points;
+          break;
+        case 'marginError':
+          valA = a.marginError;
+          valB = b.marginError;
+          break;
+        default:
+          valA = a.round;
+          valB = b.round;
+      }
+
+      if (valA < valB) return resultsIndividualSort.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return resultsIndividualSort.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [resultsUserId, user, games, allTips, resultsIndividualSort]);
+
+  const handleSort = (section: 'leaderboard' | 'individual' | 'summary', key: string) => {
+    if (section === 'leaderboard') {
+      setLeaderboardSort(prev => ({
+        key,
+        direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+      }));
+    } else if (section === 'individual') {
+      setResultsIndividualSort(prev => ({
+        key,
+        direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+      }));
+    } else if (section === 'summary') {
+      setResultsRoundSummarySort(prev => ({
+        key,
+        direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+      }));
+    }
+  };
 
   const exportToCSV = () => {
     let headers: string[] = [];
@@ -863,44 +1191,60 @@ export default function App() {
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUserName || !newUserEmail) return;
+    console.log("handleCreateUser called", { newUserName, newUserEmail, newUserRole });
+    
+    if (!newUserName.trim() || !newUserEmail.trim()) {
+      setError("Please provide both a name and an email.");
+      return;
+    }
 
     // Check if user already exists
-    const existingUser = allUsers.find(u => u.email.toLowerCase() === newUserEmail.toLowerCase());
+    const existingUser = allUsers.find(u => u.email.toLowerCase() === newUserEmail.trim().toLowerCase());
     if (existingUser) {
+      console.log("User already exists", existingUser);
       setError("A user with this email already exists.");
       return;
     }
 
     setIsActionLoading(true);
+    setError(null);
     const tempUid = `manual_${Date.now()}`;
+    console.log("Creating user with tempUid:", tempUid);
+    
     const newProfile: UserProfile = {
       uid: tempUid,
-      displayName: newUserName,
-      email: newUserEmail.toLowerCase(),
-      role: 'user',
+      displayName: newUserName.trim(),
+      email: newUserEmail.trim().toLowerCase(),
+      role: newUserRole,
       totalPoints: 0,
       totalMargin: 0,
       unlockedRounds: []
     };
 
     try {
+      console.log("Writing to users collection...");
       await setDoc(doc(db, 'users', tempUid), newProfile);
+      
+      console.log("Writing to public_profiles collection...");
       // Also create public profile for manual users
       await setDoc(doc(db, 'public_profiles', tempUid), {
         uid: tempUid,
-        displayName: newUserName,
-        email: newUserEmail.toLowerCase(),
-        role: 'user',
+        displayName: newUserName.trim(),
+        email: newUserEmail.trim().toLowerCase(),
+        role: newUserRole,
         totalPoints: 0,
         totalMargin: 0,
         favoriteTeam: ''
       });
+      
+      console.log("User created successfully");
       setNewUserName('');
       setNewUserEmail('');
+      setNewUserRole('user');
     } catch (err) {
       console.error("Failed to create user:", err);
-      setError("Failed to create user profile.");
+      handleFirestoreError(err, OperationType.WRITE, `users/${tempUid}`);
+      setError("Failed to create user profile. Check your permissions.");
     } finally {
       setIsActionLoading(false);
     }
@@ -934,10 +1278,12 @@ export default function App() {
     if (!editingUserName.trim()) return;
 
     setIsActionLoading(true);
+    setError(null);
     try {
       const updates = {
         displayName: editingUserName.trim(),
-        favoriteTeam: editingUserFavoriteTeam
+        favoriteTeam: editingUserFavoriteTeam,
+        role: editingUserRole
       };
       await updateDoc(doc(db, 'users', userId), updates);
       // Use setDoc with merge: true to ensure public profile exists
@@ -945,8 +1291,10 @@ export default function App() {
       setEditingUserId(null);
       setEditingUserName('');
       setEditingUserFavoriteTeam('');
+      setEditingUserRole('user');
     } catch (err) {
       console.error("Failed to update user:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
       setError("Failed to update user profile.");
     } finally {
       setIsActionLoading(false);
@@ -989,6 +1337,14 @@ export default function App() {
   }, [roundGames]);
 
   const warRoomTips = allTips.filter(t => t.uid === warRoomUserId);
+  
+  const accentColor = useMemo(() => {
+    if (profile?.favoriteTeam && AFL_TEAM_COLORS[profile.favoriteTeam]) {
+      return AFL_TEAM_COLORS[profile.favoriteTeam];
+    }
+    return '#002B5C'; // Default AFL Navy
+  }, [profile]);
+
   const rounds = useMemo(() => {
     const rSet = new Set(games.map(g => g.round));
     return Array.from(rSet).sort((a: any, b: any) => a - b);
@@ -1005,9 +1361,18 @@ export default function App() {
 
   if (loading || isFetchingGames || isFetchingStandings) {
     return (
-      <div className="min-h-screen bg-stone-100 dark:bg-stone-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-afl-accent"></div>
+      <div className="min-h-screen bg-stone-100 dark:bg-stone-950 flex items-center justify-center relative overflow-hidden">
+        <div 
+          className="absolute inset-0 opacity-10 pointer-events-none"
+          style={{ 
+            background: `radial-gradient(circle at center, ${accentColor} 0%, transparent 70%)`
+          }}
+        />
+        <div className="flex flex-col items-center gap-4 relative z-10">
+          <div 
+            className="animate-spin rounded-full h-12 w-12 border-b-2"
+            style={{ borderColor: accentColor }}
+          ></div>
           <p className="text-stone-500 dark:text-stone-400 text-sm font-mono animate-pulse">
             {loading ? "Authenticating..." : "Loading AFL Data..."}
           </p>
@@ -1018,8 +1383,14 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#E4E3E0] dark:bg-stone-950 flex flex-col items-center justify-center p-4 transition-colors duration-300">
-        <div className="max-w-md w-full bg-white dark:bg-stone-900 p-8 rounded-2xl shadow-xl border border-black/5 dark:border-white/5 transition-colors">
+      <div className="min-h-screen bg-[#E4E3E0] dark:bg-stone-950 flex flex-col items-center justify-center p-4 transition-colors duration-300 relative overflow-hidden">
+        <div 
+          className="absolute inset-0 opacity-5 pointer-events-none"
+          style={{ 
+            background: `radial-gradient(circle at top right, ${accentColor} 0%, transparent 40%), radial-gradient(circle at bottom left, #FFCC33 0%, transparent 40%)`
+          }}
+        />
+        <div className="max-w-md w-full bg-white dark:bg-stone-900 p-8 rounded-2xl shadow-xl border border-black/5 dark:border-white/5 transition-colors relative z-10">
           <div className="text-center mb-8">
             <Trophy className="w-16 h-16 text-afl-gold mx-auto mb-6" />
             <h1 className="text-4xl font-serif italic mb-2 text-stone-900 dark:text-stone-100">Adrian's Tipping Page</h1>
@@ -1124,43 +1495,79 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F5F5F0] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans transition-colors duration-300">
       {/* Header */}
-      <header className="bg-white dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 sticky top-0 z-50 transition-colors duration-300">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Trophy className="w-8 h-8 text-afl-gold" />
-            <span className="font-serif italic text-xl font-bold tracking-tight">Adrian's Tipping</span>
+      <header className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-b border-stone-200 dark:border-stone-800 sticky top-0 z-50 transition-colors duration-300">
+        <div className="max-w-5xl mx-auto px-4 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div 
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg transition-all"
+              style={{ 
+                backgroundColor: accentColor,
+                boxShadow: `0 8px 16px ${accentColor}40`
+              }}
+            >
+              <Trophy className="w-6 h-6" />
+            </div>
+            <div>
+              <h1 className="text-xl font-serif italic tracking-tight dark:text-stone-100">Adrian's Tipping</h1>
+              <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">2026 Season</p>
+            </div>
           </div>
           
-          <nav className="hidden md:flex items-center gap-6">
-            <button 
-              onClick={() => setActiveTab('war-room')}
-              className={cn("text-sm font-medium transition-colors", activeTab === 'war-room' ? "text-afl-accent" : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100")}
-            >
-              Enter Your Tips
-            </button>
-            <button 
-              onClick={() => setActiveTab('leaderboard')}
-              className={cn("text-sm font-medium transition-colors", activeTab === 'leaderboard' ? "text-afl-accent" : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100")}
-            >
-              Leaderboard
-            </button>
-            <button 
-              onClick={() => setActiveTab('standings')}
-              className={cn("text-sm font-medium transition-colors", activeTab === 'standings' ? "text-afl-accent" : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100")}
-            >
-              AFL ladder
-            </button>
-            <button 
-              onClick={() => setActiveTab('results')}
-              className={cn("text-sm font-medium transition-colors", activeTab === 'results' ? "text-afl-accent" : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100")}
-            >
-              Results
-            </button>
+          <nav className="hidden md:flex items-center gap-1 bg-stone-100 dark:bg-stone-800/50 p-1 rounded-2xl">
+            {[
+              { id: 'war-room', label: 'Tips', icon: Calendar },
+              { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
+              { id: 'standings', label: 'AFL Ladder', icon: LayoutGrid },
+              { id: 'results', label: 'Results', icon: CheckCircle2 },
+            ].map((tab) => {
+              const hasLiveGames = tab.id === 'war-room' && games.some(g => new Date() > new Date(g.date) && !g.isFinished);
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={cn(
+                    "px-6 py-2.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 relative overflow-hidden",
+                    activeTab === tab.id 
+                      ? "text-white shadow-md" 
+                      : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-white dark:hover:bg-stone-800"
+                  )}
+                  style={activeTab === tab.id ? { 
+                    backgroundColor: accentColor,
+                    boxShadow: `0 4px 12px ${accentColor}40`
+                  } : {}}
+                >
+                  <tab.icon className={cn("w-4 h-4", activeTab === tab.id ? "text-white" : "text-stone-400")} />
+                  {tab.label}
+                  {hasLiveGames && (
+                    <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
+                  )}
+                  {activeTab === tab.id && (
+                    <motion.div 
+                      layoutId="nav-glow"
+                      className="absolute inset-0 bg-white/20"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  )}
+                </button>
+              );
+            })}
             {profile?.role === 'admin' && (
               <button 
                 onClick={() => setActiveTab('admin')}
-                className={cn("text-sm font-medium transition-colors", activeTab === 'admin' ? "text-afl-accent" : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100")}
+                className={cn(
+                  "px-6 py-2.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 relative overflow-hidden",
+                  activeTab === 'admin' 
+                    ? "text-white shadow-md" 
+                    : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-white dark:hover:bg-stone-800"
+                )}
+                style={activeTab === 'admin' ? { 
+                  backgroundColor: accentColor,
+                  boxShadow: `0 4px 12px ${accentColor}40`
+                } : {}}
               >
+                <Shield className={cn("w-4 h-4", activeTab === 'admin' ? "text-white" : "text-stone-400")} />
                 Admin
               </button>
             )}
@@ -1257,13 +1664,82 @@ export default function App() {
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <p>{error}</p>
-            <button onClick={() => setError(null)} className="ml-auto font-bold">✕</button>
+            <div className="flex-1 flex items-center justify-between gap-4">
+              <p>{error}</p>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setError(null);
+                    fetchGames(true);
+                    fetchStandings();
+                  }} 
+                  className="px-3 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-bold text-xs"
+                >
+                  Retry
+                </button>
+                <button onClick={() => setError(null)} className="p-1 hover:bg-red-100 rounded-full transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
         {activeTab === 'war-room' && (
           <div className="space-y-8">
+            {/* Live Scores Ticker */}
+            {games.filter(g => new Date() > new Date(g.date) && !g.isFinished).length > 0 && (
+              <div className="relative overflow-hidden bg-stone-900/40 dark:bg-stone-900/60 backdrop-blur-md rounded-3xl border border-white/5 p-4 shadow-xl">
+                <div className="flex items-center gap-3 mb-3 px-2">
+                  <div className="flex items-center gap-2 px-2 py-1 bg-red-500/20 border border-red-500/30 rounded-lg">
+                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                    <span className="text-[10px] font-black uppercase text-red-500 tracking-wider">Live Scores</span>
+                  </div>
+                  <div className="h-px flex-1 bg-gradient-to-r from-white/10 to-transparent" />
+                </div>
+                <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide mask-fade-right">
+                  {games
+                    .filter(g => new Date() > new Date(g.date) && !g.isFinished)
+                    .map(g => (
+                      <div 
+                        key={g.id}
+                        className="flex-shrink-0 min-w-[200px] bg-white/5 border border-white/10 rounded-2xl p-3 flex flex-col gap-2 hover:bg-white/10 transition-all cursor-pointer group"
+                        onClick={() => {
+                          setCurrentRound(g.round);
+                          setExpandedGameId(g.id);
+                          const el = document.getElementById(`game-${g.id}`);
+                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }}
+                      >
+                        <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 uppercase tracking-widest">
+                          <span>{g.timestr || 'Live'}</span>
+                          <span className="text-afl-gold">{g.complete}%</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex flex-col gap-1 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold truncate" style={{ color: AFL_TEAM_COLORS[g.hometeam] }}>{g.hometeam}</span>
+                              <span className="text-sm font-serif italic text-white">{g.hscore}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold truncate" style={{ color: AFL_TEAM_COLORS[g.awayteam] }}>{g.awayteam}</span>
+                              <span className="text-sm font-serif italic text-white">{g.ascore}</span>
+                            </div>
+                          </div>
+                          <div className="w-px h-8 bg-white/10" />
+                          <div className="flex flex-col items-center justify-center min-w-[40px]">
+                            <span className="text-[10px] font-black text-afl-gold">
+                              {Math.abs((g.hscore || 0) - (g.ascore || 0))}
+                            </span>
+                            <span className="text-[8px] font-bold text-stone-500 uppercase">Diff</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
             {/* Enter Your Tips Header & Sliding Bar */}
             <div className="bg-stone-900 text-white p-6 rounded-3xl shadow-2xl border border-white/10 overflow-hidden relative">
               <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
@@ -1354,12 +1830,59 @@ export default function App() {
                           {gameTip && <CheckCircle2 className="w-3 h-3 text-afl-accent" />}
                         </div>
                         <div className="space-y-1">
-                          <div className={cn("text-xs font-bold truncate", gameTip?.selectedTeam === game.hometeam && "text-afl-accent")}>
+                          <div 
+                            className={cn("text-xs font-bold truncate")}
+                            style={{ color: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : undefined }}
+                          >
                             {game.hometeam}
                           </div>
-                          <div className={cn("text-xs font-bold truncate", gameTip?.selectedTeam === game.awayteam && "text-afl-accent")}>
+                          <div 
+                            className={cn("text-xs font-bold truncate")}
+                            style={{ color: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : undefined }}
+                          >
                             {game.awayteam}
                           </div>
+                          {game.isFirstInRound && (
+                            <div className="mt-2 pt-2 border-t border-stone-100 dark:border-stone-800">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[8px] font-black uppercase text-afl-gold">Margin</span>
+                                <div className="flex items-center gap-1">
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const current = gameTip?.margin || 0;
+                                      saveTip(game.id, game.round, gameTip?.selectedTeam || '', Math.max(0, current - 10));
+                                    }}
+                                    className="p-0.5 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors"
+                                    title="Decrease by 10"
+                                  >
+                                    <Minus className="w-2 h-2" />
+                                  </button>
+                                  <input 
+                                    type="number"
+                                    placeholder="Pts"
+                                    value={gameTip?.margin || ''}
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                      const val = parseInt(e.target.value);
+                                      saveTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : val);
+                                    }}
+                                    className="w-12 text-center text-[10px] font-bold bg-transparent outline-none border-b border-stone-200 focus:border-afl-accent"
+                                  />
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const current = gameTip?.margin || 0;
+                                      saveTip(game.id, game.round, gameTip?.selectedTeam || '', current + 10);
+                                    }}
+                                    className="p-0.5 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors"
+                                    title="Increase by 10"
+                                  >
+                                    <Plus className="w-2 h-2" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -1373,7 +1896,9 @@ export default function App() {
               {roundGames.map(game => {
                 const gameTip = warRoomTips.find(t => t.gameId === game.id);
                 const isLocked = new Date() > new Date(game.date) && !profile?.unlockedRounds?.includes(game.round);
+                const hasStarted = new Date() > new Date(game.date);
                 const isFinished = game.isFinished;
+                const isOngoing = hasStarted && !isFinished;
                 const isExpanded = expandedGameId === game.id;
                 const isActive = activeGameId === game.id;
 
@@ -1381,48 +1906,90 @@ export default function App() {
                   <motion.div 
                     layout
                     key={game.id} 
+                    id={`game-${game.id}`}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    whileHover={{ y: -4 }}
                     className={cn(
-                      "relative bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm transition-all cursor-pointer",
-                      "hover:scale-[1.01] active:scale-[0.99]",
-                      isActive && "ring-2 ring-afl-accent ring-offset-2 dark:ring-offset-stone-950 border-transparent shadow-lg shadow-afl-accent/10"
+                      "relative bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm transition-all cursor-pointer",
+                      isActive && "ring-2 ring-afl-accent ring-offset-4 dark:ring-offset-stone-950 border-transparent shadow-xl shadow-afl-accent/10"
                     )}
                     style={{
                       boxShadow: hoveredGameId === game.id 
-                        ? `0 20px 25px -5px ${AFL_TEAM_COLORS[game.hteam]}20, 0 8px 10px -6px ${AFL_TEAM_COLORS[game.hteam]}20`
+                        ? `0 25px 50px -12px ${AFL_TEAM_COLORS[game.hometeam] || '#ccc'}30, 0 10px 20px -10px ${AFL_TEAM_COLORS[game.awayteam] || '#ccc'}30`
                         : undefined
                     }}
                     onMouseEnter={() => setHoveredGameId(game.id)}
                     onMouseLeave={() => setHoveredGameId(null)}
                     onClick={() => setExpandedGameId(isExpanded ? null : game.id)}
                   >
+                    {/* Team Color Accent Background */}
+                    <div 
+                      className="absolute inset-0 pointer-events-none transition-opacity duration-500 opacity-0"
+                      style={{ 
+                        opacity: hoveredGameId === game.id ? 0.03 : 0,
+                        background: `linear-gradient(135deg, ${AFL_TEAM_COLORS[game.hometeam]} 0%, ${AFL_TEAM_COLORS[game.awayteam]} 100%)`
+                      }}
+                    />
+
                     {/* Team Color Border Highlight */}
                     <div 
                       className="absolute inset-0 pointer-events-none transition-opacity duration-300 opacity-0"
                       style={{ 
                         opacity: hoveredGameId === game.id ? 1 : 0,
-                        padding: '2px',
-                        background: `linear-gradient(135deg, ${AFL_TEAM_COLORS[game.hteam] || '#ccc'} 0%, ${AFL_TEAM_COLORS[game.ateam] || '#ccc'} 100%)`,
+                        padding: '1.5px',
+                        background: `linear-gradient(135deg, ${AFL_TEAM_COLORS[game.hometeam] || '#ccc'} 0%, ${AFL_TEAM_COLORS[game.awayteam] || '#ccc'} 100%)`,
                         mask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
                         maskComposite: 'exclude',
                         WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
                         WebkitMaskComposite: 'xor',
-                        borderRadius: '1rem'
+                        borderRadius: '1.5rem'
                       }}
                     />
 
-                    <div className="p-4 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between bg-stone-50/50 dark:bg-stone-900/50">
+                    <div className="p-4 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between bg-stone-50/30 dark:bg-stone-900/30 relative z-10">
                       <div className="flex items-center gap-3">
                         <Clock className="w-4 h-4 text-stone-400" />
                         <span className="text-xs font-medium text-stone-500 dark:text-stone-400">
                           {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')} AWST • {game.venue}
                         </span>
-                        {isActive && (
-                          <span className="flex items-center gap-1 px-2 py-0.5 bg-afl-accent text-white rounded text-[8px] font-black uppercase tracking-tighter animate-pulse">
-                            {new Date() > new Date(game.date) ? 'Live Now' : 'Next Up'}
+                        {isOngoing && (
+                          <div className="flex items-center gap-2">
+                            <span 
+                              className="flex items-center gap-1 px-2 py-0.5 text-white rounded text-[8px] font-black uppercase tracking-tighter animate-pulse shadow-sm"
+                              style={{ 
+                                background: `linear-gradient(90deg, ${accentColor}, #FF4444)`
+                              }}
+                            >
+                              <Zap className="w-2 h-2 fill-white" /> Live Now
+                            </span>
+                            <span className="text-[10px] font-black text-afl-gold uppercase tracking-widest bg-stone-100 dark:bg-stone-800 px-2 py-0.5 rounded">
+                              {game.timestr || 'Ongoing'} • {game.complete}%
+                            </span>
+                          </div>
+                        )}
+                        {isActive && !isOngoing && !isFinished && (
+                          <span 
+                            className="flex items-center gap-1 px-2 py-0.5 text-white rounded text-[8px] font-black uppercase tracking-tighter shadow-sm"
+                            style={{ backgroundColor: accentColor }}
+                          >
+                            Next Up
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-3">
+                        {game.isFirstInRound && (
+                          <div 
+                            className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-black uppercase animate-pulse border shadow-sm"
+                            style={{ 
+                              backgroundColor: `${AFL_TEAM_COLORS['Richmond Tigers']}20`,
+                              borderColor: `${AFL_TEAM_COLORS['Richmond Tigers']}40`,
+                              color: AFL_TEAM_COLORS['Richmond Tigers']
+                            }}
+                          >
+                            <Star className="w-3 h-3 fill-current" /> Bonus Game
+                          </div>
+                        )}
                         {isLocked ? (
                           <div className="flex items-center gap-1.5 px-2 py-1 bg-stone-200 dark:bg-stone-800 rounded text-[10px] font-bold text-stone-600 dark:text-stone-400 uppercase">
                             <Lock className="w-3 h-3" /> Locked
@@ -1436,40 +2003,61 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
+                    <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8 items-center relative z-10">
                       {/* Home Team */}
-                      <button 
+                      <motion.button 
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
                         disabled={savingTipId === game.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           saveTip(game.id, game.round, game.hometeam, gameTip?.margin);
                         }}
                         style={{ 
-                          borderTopColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : undefined,
-                          borderRightColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : undefined,
-                          borderBottomColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : undefined,
+                          borderTopColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : 'transparent',
+                          borderRightColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : 'transparent',
+                          borderBottomColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : 'transparent',
                           borderLeftColor: AFL_TEAM_COLORS[game.hometeam],
-                          borderLeftWidth: '8px'
+                          borderLeftWidth: '6px'
                         }}
                         className={cn(
-                          "flex flex-col items-center gap-4 p-5 rounded-xl transition-all border-2 relative",
+                          "flex flex-col items-center gap-4 p-6 rounded-2xl transition-all border-2 relative overflow-hidden group/team",
                           gameTip?.selectedTeam === game.hometeam 
-                            ? "bg-stone-50 dark:bg-stone-800/50 ring-2 ring-offset-2 dark:ring-offset-stone-900" 
-                            : "bg-white dark:bg-stone-800 border-stone-100 dark:border-stone-700 hover:border-stone-200 dark:hover:border-stone-600",
-                          gameTip?.selectedTeam === game.hometeam && "ring-afl-accent/20",
+                            ? "bg-stone-50 dark:bg-stone-800/80 shadow-inner" 
+                            : "bg-white dark:bg-stone-800/40 border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/60",
                           savingTipId === game.id && "opacity-50"
                         )}
                       >
+                        {/* Selected Indicator Background */}
+                        {gameTip?.selectedTeam === game.hometeam && (
+                          <div 
+                            className="absolute inset-0 opacity-5 pointer-events-none"
+                            style={{ backgroundColor: AFL_TEAM_COLORS[game.hometeam] }}
+                          />
+                        )}
+
                         {savingTipId === game.id && (
                           <div className="absolute inset-0 flex items-center justify-center bg-white/10 dark:bg-black/10 rounded-xl z-10">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-afl-accent"></div>
                           </div>
                         )}
-                        <span className="text-xl font-bold dark:text-stone-100">{game.hometeam}</span>
-                        {isFinished && (
+                        <span 
+                          className="text-xl font-serif italic font-black tracking-tight group-hover/team:scale-110 transition-transform"
+                          style={{ color: AFL_TEAM_COLORS[game.hometeam] }}
+                        >
+                          {game.hometeam}
+                        </span>
+                        {hasStarted && (
                           <div className="flex flex-col items-center gap-1">
-                            <span className="text-3xl font-serif italic text-stone-400 dark:text-stone-500">{game.hscore}</span>
-                            {game.winner === game.hometeam && (
+                            <span className={cn(
+                              "text-4xl font-mono font-black",
+                              isOngoing ? "animate-pulse" : "text-stone-400 dark:text-stone-500"
+                            )}
+                            style={{ color: isOngoing ? accentColor : undefined }}
+                            >
+                              {game.hscore}
+                            </span>
+                            {isFinished && game.winner === game.hometeam && (
                               <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 animate-in zoom-in duration-500">
                                 <CheckCircle2 className="w-4 h-4" />
                                 <Trophy className="w-4 h-4" />
@@ -1477,70 +2065,125 @@ export default function App() {
                             )}
                           </div>
                         )}
-                      </button>
+                      </motion.button>
 
                       {/* VS / Margin */}
-                      <div className="flex flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
-                        <span className="text-xs font-mono text-stone-300 uppercase tracking-widest">VS</span>
+                      <div className="flex flex-col items-center gap-6" onClick={(e) => e.stopPropagation()}>
+                        <div className="relative flex items-center justify-center">
+                          <div className="absolute w-12 h-12 bg-stone-100 dark:bg-stone-800 rounded-full scale-150 opacity-20" />
+                          <span className="text-sm font-black text-stone-300 dark:text-stone-700 uppercase tracking-[0.5em] relative z-10">VS</span>
+                        </div>
                         
                         {game.isFirstInRound && (
-                          <div className="w-full max-w-[120px]">
-                            <label className="block text-[10px] text-center uppercase font-bold text-stone-400 mb-2">Winning Margin</label>
-                            <input 
-                              type="number"
-                              placeholder="Pts"
-                              value={gameTip?.margin || ''}
-                              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                const valStr = e.target.value;
-                                const val = parseInt(valStr);
-                                saveTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : (val as number));
-                              }}
-                              className="w-full text-center py-2 border-b-2 border-stone-200 dark:border-stone-800 focus:border-afl-accent outline-none font-serif text-xl bg-transparent dark:text-stone-100 transition-colors disabled:opacity-50"
-                            />
-                            <p className="text-[10px] text-center text-afl-gold mt-2 font-medium italic">Bonus Point Game!</p>
+                          <div className="w-full max-w-[220px] p-5 rounded-3xl bg-afl-gold/5 border border-afl-gold/20 relative group/margin shadow-sm">
+                            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-afl-gold text-white text-[9px] font-black uppercase rounded-full shadow-lg tracking-widest">
+                              Bonus Point
+                            </div>
+                            <label className="block text-[10px] text-center uppercase font-black text-stone-400 mb-3 tracking-widest">Winning Margin</label>
+                            <div className="flex items-center gap-3">
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const current = gameTip?.margin || 0;
+                                  saveTip(game.id, game.round, gameTip?.selectedTeam || '', Math.max(0, current - 10));
+                                }}
+                                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
+                                title="Decrease by 10"
+                              >
+                                -10
+                              </button>
+                              <div className="relative flex-1">
+                                <input 
+                                  type="number"
+                                  placeholder="0"
+                                  value={gameTip?.margin || ''}
+                                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                    const valStr = e.target.value;
+                                    const val = parseInt(valStr);
+                                    saveTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : (val as number));
+                                  }}
+                                  className="w-full text-center py-2 border-b-2 border-afl-gold/30 focus:border-afl-gold outline-none font-mono text-4xl font-black bg-transparent dark:text-stone-100 transition-all disabled:opacity-50"
+                                />
+                              </div>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const current = gameTip?.margin || 0;
+                                  saveTip(game.id, game.round, gameTip?.selectedTeam || '', current + 10);
+                                }}
+                                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
+                                title="Increase by 10"
+                              >
+                                +10
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-center text-afl-gold mt-4 font-bold italic leading-tight opacity-80">
+                              Predict the exact margin!
+                            </p>
                           </div>
                         )}
 
                         {isFinished && game.winner && (
-                          <div className="flex items-center gap-2 px-3 py-1 bg-stone-900 text-white rounded-full text-[10px] font-bold uppercase tracking-wider">
+                          <div className="flex items-center gap-2 px-4 py-1.5 bg-stone-900 dark:bg-stone-100 dark:text-stone-900 text-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg">
                             Winner: {game.winner}
                           </div>
                         )}
                       </div>
 
                       {/* Away Team */}
-                      <button 
+                      <motion.button 
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
                         disabled={savingTipId === game.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           saveTip(game.id, game.round, game.awayteam, gameTip?.margin);
                         }}
                         style={{ 
-                          borderTopColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : undefined,
-                          borderLeftColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : undefined,
-                          borderBottomColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : undefined,
+                          borderTopColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : 'transparent',
+                          borderLeftColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : 'transparent',
+                          borderBottomColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : 'transparent',
                           borderRightColor: AFL_TEAM_COLORS[game.awayteam],
-                          borderRightWidth: '8px'
+                          borderRightWidth: '6px'
                         }}
                         className={cn(
-                          "flex flex-col items-center gap-4 p-5 rounded-xl transition-all border-2 relative",
+                          "flex flex-col items-center gap-4 p-6 rounded-2xl transition-all border-2 relative overflow-hidden group/team",
                           gameTip?.selectedTeam === game.awayteam 
-                            ? "bg-stone-50 dark:bg-stone-800/50 ring-2 ring-offset-2 dark:ring-offset-stone-900" 
-                            : "bg-white dark:bg-stone-800 border-stone-100 dark:border-stone-700 hover:border-stone-200 dark:hover:border-stone-600",
-                          gameTip?.selectedTeam === game.awayteam && "ring-afl-accent/20",
+                            ? "bg-stone-50 dark:bg-stone-800/80 shadow-inner" 
+                            : "bg-white dark:bg-stone-800/40 border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/60",
                           savingTipId === game.id && "opacity-50"
                         )}
                       >
+                        {/* Selected Indicator Background */}
+                        {gameTip?.selectedTeam === game.awayteam && (
+                          <div 
+                            className="absolute inset-0 opacity-5 pointer-events-none"
+                            style={{ backgroundColor: AFL_TEAM_COLORS[game.awayteam] }}
+                          />
+                        )}
+
                         {savingTipId === game.id && (
                           <div className="absolute inset-0 flex items-center justify-center bg-white/10 dark:bg-black/10 rounded-xl z-10">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-afl-accent"></div>
                           </div>
                         )}
-                        <span className="text-xl font-bold dark:text-stone-100">{game.awayteam}</span>
-                        {isFinished && (
+                        <span 
+                          className="text-xl font-serif italic font-black tracking-tight group-hover/team:scale-110 transition-transform"
+                          style={{ color: AFL_TEAM_COLORS[game.awayteam] }}
+                        >
+                          {game.awayteam}
+                        </span>
+                        {hasStarted && (
                           <div className="flex flex-col items-center gap-1">
-                            <span className="text-3xl font-serif italic text-stone-400 dark:text-stone-500">{game.ascore}</span>
-                            {game.winner === game.awayteam && (
+                            <span className={cn(
+                              "text-4xl font-mono font-black",
+                              isOngoing ? "animate-pulse" : "text-stone-400 dark:text-stone-500"
+                            )}
+                            style={{ color: isOngoing ? accentColor : undefined }}
+                            >
+                              {game.ascore}
+                            </span>
+                            {isFinished && game.winner === game.awayteam && (
                               <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 animate-in zoom-in duration-500">
                                 <CheckCircle2 className="w-4 h-4" />
                                 <Trophy className="w-4 h-4" />
@@ -1548,7 +2191,7 @@ export default function App() {
                             )}
                           </div>
                         )}
-                      </button>
+                      </motion.button>
                     </div>
 
                     <AnimatePresence>
@@ -1648,14 +2291,30 @@ export default function App() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
-                    <th className="px-8 py-4 font-medium">Pos</th>
-                    <th className="px-8 py-4 font-medium">Player</th>
-                    <th className="px-8 py-4 font-medium text-center">Points</th>
-                    <th className="px-8 py-4 font-medium text-center">Margin Error</th>
+                    <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'rank')}>
+                      <div className="flex items-center gap-1">
+                        Pos {leaderboardSort.key === 'rank' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </div>
+                    </th>
+                    <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'displayName')}>
+                      <div className="flex items-center gap-1">
+                        Player {leaderboardSort.key === 'displayName' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </div>
+                    </th>
+                    <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'points')}>
+                      <div className="flex items-center justify-center gap-1">
+                        Points {leaderboardSort.key === 'points' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </div>
+                    </th>
+                    <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'marginError')}>
+                      <div className="flex items-center justify-center gap-1">
+                        Margin Error {leaderboardSort.key === 'marginError' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {leaderboardData.map((u, idx) => {
+                  {leaderboardData.map((u) => {
                     const isExpanded = expandedUserId === u.uid;
                     const userTips = allTips.filter(t => t.uid === u.uid);
                     
@@ -1664,13 +2323,19 @@ export default function App() {
                         <tr 
                           onClick={() => setExpandedUserId(isExpanded ? null : u.uid)}
                           className={cn(
-                            "border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 dark:hover:bg-stone-800/50 transition-colors cursor-pointer", 
-                            u.uid === user?.uid && "bg-afl-navy/10 dark:bg-afl-navy/20",
-                            isExpanded && "bg-stone-50 dark:bg-stone-800/80"
+                            "border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 dark:hover:bg-stone-800/50 transition-colors cursor-pointer relative group", 
+                            u.uid === user?.uid && "bg-stone-50 dark:bg-stone-800/50",
+                            isExpanded && "bg-stone-100 dark:bg-stone-800/80"
                           )}
                         >
-                          <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700">
-                            {idx + 1 < 10 ? `0${idx + 1}` : idx + 1}
+                          <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700 relative">
+                            {u.favoriteTeam && (
+                              <div 
+                                className="absolute left-0 top-0 bottom-0 w-1 opacity-60 group-hover:opacity-100 transition-opacity"
+                                style={{ backgroundColor: AFL_TEAM_COLORS[u.favoriteTeam] }}
+                              />
+                            )}
+                            {u.rank < 10 ? `0${u.rank}` : u.rank}
                           </td>
                           <td className="px-8 py-6">
                             <div className="flex items-center gap-3">
@@ -1706,7 +2371,12 @@ export default function App() {
                             </div>
                           </td>
                           <td className="px-8 py-6 text-center">
-                            <span className="text-2xl font-serif font-bold text-afl-accent">{u.calculatedPoints}</span>
+                            <span 
+                              className="text-2xl font-serif font-bold"
+                              style={{ color: accentColor }}
+                            >
+                              {u.calculatedPoints}
+                            </span>
                           </td>
                           <td className="px-8 py-6 text-center">
                             <span className="text-lg font-mono text-stone-500 dark:text-stone-400">{u.calculatedMargin}</span>
@@ -1838,6 +2508,10 @@ export default function App() {
                       </td>
                       <td className="px-8 py-6">
                         <div className="flex items-center gap-3">
+                          <div 
+                            className="w-2 h-6 rounded-full"
+                            style={{ backgroundColor: AFL_TEAM_COLORS[s.name] || '#ccc' }}
+                          />
                           <span className="font-bold text-stone-900 dark:text-stone-100">{s.name}</span>
                         </div>
                       </td>
@@ -1845,8 +2519,8 @@ export default function App() {
                       <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.wins}</td>
                       <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.losses}</td>
                       <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.draws}</td>
-                      <td className="px-8 py-6 text-center font-serif font-bold text-afl-accent text-xl">{s.pts}</td>
-                      <td className="px-8 py-6 text-center font-mono text-stone-500 dark:text-stone-500">{s.percentage.toFixed(1)}</td>
+                      <td className="px-8 py-6 text-center font-serif font-bold text-xl" style={{ color: accentColor }}>{s.pts}</td>
+                      <td className="px-8 py-6 text-center font-mono text-stone-500 dark:text-stone-500">{(s.percentage || 0).toFixed(1)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1959,6 +2633,19 @@ export default function App() {
                   <FileSpreadsheet className="w-4 h-4" />
                   Export to CSV
                 </button>
+
+                {resultsSubTab === 'round-summary' && (
+                  <button 
+                    onClick={() => {
+                      setRecapRound(resultsSelectedRound);
+                      setIsRoundRecapOpen(true);
+                    }}
+                    className="flex items-center gap-2 px-6 py-3 bg-afl-accent text-white rounded-2xl text-sm font-bold hover:bg-afl-accent/90 transition-all shadow-lg shadow-afl-accent/20 dark:shadow-none"
+                  >
+                    <Zap className="w-4 h-4" />
+                    Round Recap
+                  </button>
+                )}
               </div>
             </div>
             
@@ -1973,10 +2660,26 @@ export default function App() {
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
-                        <th className="px-8 py-4 font-medium">Round</th>
-                        <th className="px-8 py-4 font-medium text-center">Correct Tips</th>
-                        <th className="px-8 py-4 font-medium text-center">Total Points</th>
-                        <th className="px-8 py-4 font-medium text-center">Margin Error</th>
+                        <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('individual', 'round')}>
+                          <div className="flex items-center gap-1">
+                            Round {resultsIndividualSort.key === 'round' && (resultsIndividualSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('individual', 'correct')}>
+                          <div className="flex items-center justify-center gap-1">
+                            Correct Tips {resultsIndividualSort.key === 'correct' && (resultsIndividualSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('individual', 'points')}>
+                          <div className="flex items-center justify-center gap-1">
+                            Total Points {resultsIndividualSort.key === 'points' && (resultsIndividualSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('individual', 'marginError')}>
+                          <div className="flex items-center justify-center gap-1">
+                            Margin Error {resultsIndividualSort.key === 'marginError' && (resultsIndividualSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2062,15 +2765,19 @@ export default function App() {
                                               <div className="flex items-center justify-between gap-4">
                                                 <div className="flex-1 space-y-2">
                                                   <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.hteam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
-                                                    <span className={`text-sm font-bold ${game.winner === game.hteam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
-                                                      {game.hteam}
-                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                      <span className={`text-sm font-bold ${game.winner === game.hteam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
+                                                        {game.hteam}
+                                                      </span>
+                                                    </div>
                                                     {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold">{game.hscore}</span>}
                                                   </div>
                                                   <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.ateam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
-                                                    <span className={`text-sm font-bold ${game.winner === game.ateam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
-                                                      {game.ateam}
-                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                      <span className={`text-sm font-bold ${game.winner === game.ateam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
+                                                        {game.ateam}
+                                                      </span>
+                                                    </div>
                                                     {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold">{game.ascore}</span>}
                                                   </div>
                                                 </div>
@@ -2122,15 +2829,35 @@ export default function App() {
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
-                        <th className="px-8 py-4 font-medium">Pos</th>
-                        <th className="px-8 py-4 font-medium">Player</th>
-                        <th className="px-8 py-4 font-medium text-center">Correct</th>
-                        <th className="px-8 py-4 font-medium text-center">Points</th>
-                        <th className="px-8 py-4 font-medium text-center">Margin Error</th>
+                        <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('summary', 'rank')}>
+                          <div className="flex items-center gap-1">
+                            Pos {resultsRoundSummarySort.key === 'rank' && (resultsRoundSummarySort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('summary', 'displayName')}>
+                          <div className="flex items-center gap-1">
+                            Player {resultsRoundSummarySort.key === 'displayName' && (resultsRoundSummarySort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('summary', 'correct')}>
+                          <div className="flex items-center justify-center gap-1">
+                            Correct {resultsRoundSummarySort.key === 'correct' && (resultsRoundSummarySort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('summary', 'points')}>
+                          <div className="flex items-center justify-center gap-1">
+                            Points {resultsRoundSummarySort.key === 'points' && (resultsRoundSummarySort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
+                        <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('summary', 'marginError')}>
+                          <div className="flex items-center justify-center gap-1">
+                            Margin Error {resultsRoundSummarySort.key === 'marginError' && (resultsRoundSummarySort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {roundSummaryData.map((u, idx) => (
+                      {roundSummaryData.map((u) => (
                         <tr 
                           key={u.uid}
                           className={cn(
@@ -2139,7 +2866,7 @@ export default function App() {
                           )}
                         >
                           <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700">
-                            {idx + 1 < 10 ? `0${idx + 1}` : idx + 1}
+                            {u.rank < 10 ? `0${u.rank}` : u.rank}
                           </td>
                           <td className="px-8 py-6">
                             <div className="flex items-center gap-3">
@@ -2230,7 +2957,12 @@ export default function App() {
               return (
                 <div className="space-y-8">
                   {/* Profile Header */}
-                  <div className="bg-white dark:bg-stone-900 p-8 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl relative overflow-hidden">
+                  <div 
+                    className="bg-white dark:bg-stone-900 p-8 rounded-3xl border shadow-xl relative overflow-hidden"
+                    style={{ 
+                      borderColor: profileUser.favoriteTeam ? `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}40` : 'rgb(231, 229, 228)' // stone-200
+                    }}
+                  >
                     <div 
                       className="absolute top-0 right-0 w-64 h-64 opacity-5 pointer-events-none"
                       style={{ 
@@ -2252,9 +2984,16 @@ export default function App() {
                         <div className="flex flex-wrap items-center justify-center md:justify-start gap-3">
                           <span className="text-xs font-mono text-stone-400 uppercase tracking-widest">{profileUser.email}</span>
                           {profileUser.favoriteTeam && (
-                            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-sm border border-white/20">
+                            <div 
+                              className="flex items-center gap-1.5 px-3 py-1 rounded-full backdrop-blur-sm border"
+                              style={{ 
+                                backgroundColor: `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}20`,
+                                borderColor: `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}40`
+                              }}
+                            >
                               <span 
-                                className="text-[10px] font-bold text-white uppercase tracking-widest"
+                                className="text-[10px] font-bold uppercase tracking-widest"
+                                style={{ color: AFL_TEAM_COLORS[profileUser.favoriteTeam] }}
                               >
                                 {profileUser.favoriteTeam} Fan
                               </span>
@@ -2284,13 +3023,13 @@ export default function App() {
                       </div>
                       <div className="bg-stone-50 dark:bg-stone-800/50 p-6 rounded-2xl border border-stone-100 dark:border-stone-800">
                         <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-2">Win Rate</p>
-                        <p className="text-4xl font-serif font-bold text-stone-900 dark:text-stone-100">{winRate.toFixed(1)}%</p>
+                        <p className="text-4xl font-serif font-bold text-stone-900 dark:text-stone-100">{(winRate || 0).toFixed(1)}%</p>
                       </div>
                       <div className="bg-stone-50 dark:bg-stone-800/50 p-6 rounded-2xl border border-stone-100 dark:border-stone-800">
                         <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-2">Avg Margin Err</p>
                         <p className="text-4xl font-serif font-bold text-stone-500 dark:text-stone-400">
                           {userTips.filter(t => t.margin !== undefined).length > 0 
-                            ? (marginError / userTips.filter(t => t.margin !== undefined).length).toFixed(1) 
+                            ? ((marginError || 0) / userTips.filter(t => t.margin !== undefined).length).toFixed(1) 
                             : '0.0'}
                         </p>
                       </div>
@@ -2422,7 +3161,7 @@ export default function App() {
                 </div>
 
                 {/* Add User Form */}
-                <form onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-3 gap-4 p-6 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+                <form onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-4 gap-4 p-6 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-stone-400 uppercase ml-1">Name</label>
                     <input 
@@ -2443,6 +3182,17 @@ export default function App() {
                       className="w-full p-2.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-sm focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
                     />
                   </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-stone-400 uppercase ml-1">Role</label>
+                    <select 
+                      value={newUserRole}
+                      onChange={(e) => setNewUserRole(e.target.value as 'user' | 'admin')}
+                      className="w-full p-2.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-sm focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
                   <div className="flex items-end">
                     <button 
                       type="submit"
@@ -2460,7 +3210,7 @@ export default function App() {
 
                 {/* User List */}
                 <div className="grid gap-3">
-                  {[...allUsers].sort((a, b) => a.displayName.localeCompare(b.displayName)).map(u => (
+                  {[...allUsers].sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')).map(u => (
                     <div key={u.uid} className="flex items-center justify-between p-4 bg-white dark:bg-stone-900 rounded-2xl border border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700 transition-all">
                       <div className="flex-1">
                         {editingUserId === u.uid ? (
@@ -2481,6 +3231,14 @@ export default function App() {
                               {Object.keys(AFL_TEAM_COLORS).map(team => (
                                 <option key={team} value={team}>{team}</option>
                               ))}
+                            </select>
+                            <select 
+                              value={editingUserRole}
+                              onChange={(e) => setEditingUserRole(e.target.value as 'user' | 'admin')}
+                              className="p-1.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
+                            >
+                              <option value="user">User</option>
+                              <option value="admin">Admin</option>
                             </select>
                             <div className="flex items-center gap-2">
                               <button 
@@ -2521,6 +3279,7 @@ export default function App() {
                                 setEditingUserId(u.uid);
                                 setEditingUserName(u.displayName);
                                 setEditingUserFavoriteTeam(u.favoriteTeam || '');
+                                setEditingUserRole(u.role || 'user');
                               }}
                               className="p-1 text-stone-300 hover:text-stone-600 dark:hover:text-stone-400 transition-colors"
                             >
@@ -2670,14 +3429,38 @@ export default function App() {
 
                             <div className="flex items-center gap-2">
                               <span className="text-[10px] font-bold text-stone-400 uppercase">Margin:</span>
-                              <input 
-                                type="number"
-                                disabled={isActionLoading}
-                                value={playerTip?.margin !== undefined ? playerTip.margin : ''}
-                                onChange={(e) => handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, Number(e.target.value))}
-                                placeholder="Pts"
-                                className="w-16 p-1.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg text-xs font-bold focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100 disabled:opacity-50"
-                              />
+                              <div className="flex items-center gap-1">
+                                <button 
+                                  onClick={() => {
+                                    const current = playerTip?.margin || 0;
+                                    handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, Math.max(0, current - 10));
+                                  }}
+                                  disabled={isActionLoading}
+                                  className="p-1 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors disabled:opacity-50"
+                                  title="Decrease by 10"
+                                >
+                                  <Minus className="w-3 h-3" />
+                                </button>
+                                <input 
+                                  type="number"
+                                  disabled={isActionLoading}
+                                  value={playerTip?.margin !== undefined ? playerTip.margin : ''}
+                                  onChange={(e) => handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, Number(e.target.value))}
+                                  placeholder="Pts"
+                                  className="w-16 p-1.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg text-xs font-bold focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100 disabled:opacity-50 text-center"
+                                />
+                                <button 
+                                  onClick={() => {
+                                    const current = playerTip?.margin || 0;
+                                    handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, current + 10);
+                                  }}
+                                  disabled={isActionLoading}
+                                  className="p-1 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors disabled:opacity-50"
+                                  title="Increase by 10"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                </button>
+                              </div>
                               <button 
                                 onClick={() => handleAdminDeleteTip(game.id)}
                                 disabled={isActionLoading}
@@ -2802,6 +3585,62 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Round Recap Modal */}
+      {isRoundRecapOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-stone-900 w-full max-w-2xl rounded-3xl shadow-2xl border border-stone-200 dark:border-stone-800 overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-8">
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-afl-accent/10 rounded-2xl flex items-center justify-center">
+                    <Zap className="w-6 h-6 text-afl-accent" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-serif italic text-stone-900 dark:text-stone-100">Round {recapRound} Recap</h3>
+                    <p className="text-xs text-stone-400 uppercase tracking-widest">Generated Summary for Players</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsRoundRecapOpen(false)}
+                  className="p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors"
+                >
+                  <XCircle className="w-6 h-6 text-stone-400" />
+                </button>
+              </div>
+
+              <div className="bg-stone-50 dark:bg-stone-800/50 p-6 rounded-2xl border border-stone-100 dark:border-stone-800 mb-8 font-mono text-sm whitespace-pre-wrap max-h-[400px] overflow-y-auto">
+                {generateRoundRecap(recapRound)}
+              </div>
+              
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button 
+                  onClick={() => setIsRoundRecapOpen(false)}
+                  className="flex-1 py-4 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 rounded-2xl text-sm font-bold hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+                >
+                  Close
+                </button>
+                <button 
+                  onClick={() => copyToClipboard(generateRoundRecap(recapRound))}
+                  className="flex-1 py-4 bg-afl-navy text-white rounded-2xl text-sm font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20 dark:shadow-none flex items-center justify-center gap-2"
+                >
+                  {isCopied ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      Copy to Clipboard
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete User Confirmation Modal */}
       {userToDelete && (

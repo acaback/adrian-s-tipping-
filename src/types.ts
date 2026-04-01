@@ -11,6 +11,8 @@ export interface Game {
   ascore: number | null;
   isFinished: boolean;
   isFirstInRound?: boolean;
+  timestr?: string;
+  complete?: number;
 }
 
 export interface UserProfile {

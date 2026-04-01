@@ -8,6 +8,13 @@
   --color-afl-gold: #FFB800;
   --color-afl-accent: #008AAB; /* A nice teal/cyan from Port Adelaide/AFL style */
   
+  --color-stone-950: #2d2a28;
+  --color-stone-900: #3f3c3a;
+  --color-stone-800: #57534e;
+  --color-stone-700: #78716c;
+  --color-stone-600: #a8a29e;
+  --color-stone-500: #d6d3d1;
+
   --variant-dark: :where(.dark, .dark *);
 }
 
