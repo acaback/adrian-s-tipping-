@@ -50,13 +50,6 @@ export interface Tip {
   updatedAt: string;
 }
 
-export interface Team {
-  id: number;
-  name: string;
-  abbrev: string;
-  logo?: string;
-}
-
 export interface RoundStatus {
   round: number;
   isLocked: boolean;

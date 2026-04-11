@@ -25,7 +25,8 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { Game, UserProfile, Tip, Team } from './types';
+import firebaseConfig from '../firebase-applet-config.json';
+import { Game, UserProfile, Tip } from './types';
 import { 
   Trophy, 
   Calendar, 
@@ -1986,6 +1987,10 @@ Good luck in Round ${round + 1}! 🍀`;
 
   return (
     <div className="min-h-screen bg-[#F5F5F0] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans transition-colors duration-300">
+      {/* NUCLEAR REFRESH BANNER - Confirming Code Update */}
+      <div className="bg-red-600 text-white text-[14px] font-black uppercase tracking-[0.5em] py-4 text-center sticky top-0 z-[100] shadow-2xl animate-pulse border-b-4 border-white">
+        !!! VERSION 6.0 - REFRESHED @ 12:40 AM !!!
+      </div>
       <div className="print:hidden flex flex-col min-h-screen">
         {/* Header */}
       <header className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-b border-stone-200 dark:border-stone-800 sticky top-0 z-50 transition-colors duration-300 w-full">
@@ -2007,7 +2012,10 @@ Good luck in Round ${round + 1}! 🍀`;
               <Trophy className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-serif italic tracking-tight dark:text-stone-100">Family and Friends AFL Tipping</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-serif italic tracking-tight dark:text-stone-100">Family and Friends AFL Tipping</h1>
+                <span className="px-1.5 py-0.5 bg-afl-accent text-white text-[8px] font-black uppercase rounded-md shadow-sm">New</span>
+              </div>
               <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">2026 Season</p>
             </div>
           </div>
@@ -2208,7 +2216,7 @@ Good luck in Round ${round + 1}! 🍀`;
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="text-[10px] text-stone-300 font-mono">Cloud Sync Active</span>
                 </div>
-                <span className="text-[8px] text-stone-600 font-mono mt-1">Build: 2026.04.11.0204</span>
+                <span className="text-[8px] text-stone-600 font-mono mt-1">Build: 2026.04.11.0405</span>
               </div>
             </div>
           </div>
@@ -2463,11 +2471,17 @@ Good luck in Round ${round + 1}! 🍀`;
                     onChange={(e) => setWarRoomUserId(e.target.value)}
                     className="bg-transparent text-sm font-bold outline-none cursor-pointer text-stone-900 dark:text-stone-100"
                   >
-                    {allUsers.map(u => (
-                      <option key={u.uid} value={u.uid} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">
-                        {u.displayName} {u.uid === user?.uid ? '(You)' : ''}
-                      </option>
-                    ))}
+                    {allUsers.map(u => {
+                      const userRoundTips = allTips.filter(t => t.uid === u.uid && t.round === currentRound);
+                      const tipCount = userRoundTips.length;
+                      const totalGamesInRound = roundGames.length;
+                      
+                      return (
+                        <option key={u.uid} value={u.uid} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">
+                          {u.displayName} {u.uid === user?.uid ? '(You)' : ''} — {tipCount}/{totalGamesInRound} Tips
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -4431,7 +4445,10 @@ Good luck in Round ${round + 1}! 🍀`;
 
               <div className="flex items-center gap-4 pt-4">
                 <button 
-                  onClick={() => fetchGames(true)}
+                  onClick={() => {
+                    fetchGames(true);
+                    fetchStandings();
+                  }}
                   className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center gap-2"
                 >
                   <Zap className="w-3 h-3" /> Force Refresh API

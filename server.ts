@@ -16,6 +16,18 @@ async function startServer() {
     app.use(cors());
     const PORT = 3000; // Hardcoded to 3000 as per environment requirements
 
+    console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
+    console.log(`Current Time: ${new Date().toISOString()}`);
+
+    // Add a custom header to help verify deployment
+    app.use((req, res, next) => {
+      res.setHeader('X-App-Version', `2026.04.11.0739-${Math.random().toString(36).substring(7)}`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      next();
+    });
+
     // Simple in-memory cache
     const cache = new Map<string, { data: any; timestamp: number }>();
     const CACHE_TTL = 1000 * 60 * 60; // 1 hour default
