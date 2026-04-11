@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Component, ErrorInfo, ReactNode } from 'react';
 import { 
   GoogleAuthProvider, 
   signInWithPopup, 
@@ -25,7 +25,7 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { Game, UserProfile, Tip } from './types';
+import { Game, UserProfile, Tip, Team } from './types';
 import { 
   Trophy, 
   Calendar, 
@@ -42,6 +42,7 @@ import {
   Settings,
   BarChart3,
   AlertCircle,
+  ShieldAlert,
   CheckCircle2,
   Clock,
   MapPin,
@@ -55,13 +56,17 @@ import {
   X,
   XCircle,
   Trash2,
+  Edit3,
   Star,
   LayoutGrid,
   Shield,
   Plus,
   Minus,
   Copy,
-  Check
+  Check,
+  Loader2,
+  Printer,
+  Menu
 } from 'lucide-react';
 import { format, isAfter, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -73,7 +78,19 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const Skeleton = ({ className }: { className?: string }) => (
+  <div className={cn("animate-pulse bg-stone-200 dark:bg-stone-800 rounded-lg", className)} />
+);
+
 const AWST_TIMEZONE = 'Australia/Perth';
+
+const AFL_TEAMS = [
+  'Adelaide Crows', 'Brisbane Lions', 'Carlton Blues', 'Collingwood Magpies',
+  'Essendon Bombers', 'Fremantle Dockers', 'Geelong Cats', 'Gold Coast Suns',
+  'GWS Giants', 'Hawthorn Hawks', 'Melbourne Demons', 'North Melbourne Kangaroos',
+  'Port Adelaide Power', 'Richmond Tigers', 'St Kilda Saints', 'Sydney Swans',
+  'West Coast Eagles', 'Western Bulldogs'
+];
 
 const AFL_TEAM_COLORS: Record<string, string> = {
   'Adelaide': '#002B5C',
@@ -185,7 +202,227 @@ interface StandingsItem {
   percentage: number;
 }
 
-export default function App() {
+// Error Boundary Component
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends React.Component<any, any> {
+  constructor(props: any) {
+    super(props);
+    (this as any).state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    const self = this as any;
+    if (self.state.hasError) {
+      let errorMessage = "Something went wrong.";
+      let details = "";
+
+      try {
+        // Check if the error message is a JSON string from handleFirestoreError
+        const parsedError = JSON.parse(self.state.error?.message || "");
+        if (parsedError.error && parsedError.operationType) {
+          errorMessage = `Database Error: ${parsedError.operationType.toUpperCase()} failed.`;
+          details = parsedError.error;
+        }
+      } catch (e) {
+        // Not a JSON error, use the standard error message
+        errorMessage = self.state.error?.message || errorMessage;
+      }
+
+      return (
+        <div className="min-h-screen bg-stone-100 dark:bg-stone-950 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white dark:bg-stone-900 p-8 rounded-3xl shadow-2xl border border-red-500/20">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="p-3 bg-red-500/10 rounded-2xl">
+                <AlertCircle className="w-8 h-8 text-red-500" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-stone-900 dark:text-white">Application Error</h1>
+                <p className="text-stone-500 dark:text-stone-400 text-sm">We ran into an unexpected problem.</p>
+              </div>
+            </div>
+            
+            <div className="bg-stone-50 dark:bg-stone-800/50 p-4 rounded-2xl mb-6 border border-stone-200 dark:border-stone-700">
+              <p className="text-stone-800 dark:text-stone-200 font-medium mb-1">{errorMessage}</p>
+              {details && <p className="text-stone-500 dark:text-stone-400 text-xs font-mono break-all">{details}</p>}
+            </div>
+
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full py-4 bg-afl-navy text-white rounded-2xl font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return self.props.children;
+  }
+}
+
+function WarRoomPopup({ 
+  isOpen, 
+  onClose, 
+  leader, 
+  lastPlace, 
+  nextGame
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  leader: LeaderboardItem | undefined;
+  lastPlace: LeaderboardItem | undefined;
+  nextGame: Game | undefined;
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-xl">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0, y: 20 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        className="bg-stone-900 w-full max-w-2xl rounded-[2.5rem] shadow-[0_0_100px_rgba(0,0,0,0.5)] border border-white/10 overflow-hidden relative"
+      >
+        {/* Decorative Background Elements */}
+        <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-afl-gold/10 to-transparent pointer-events-none" />
+        <div className="absolute -top-24 -right-24 w-64 h-64 bg-afl-gold/5 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="p-8 md:p-12 relative z-10">
+          <div className="flex items-center justify-between mb-10">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-afl-gold flex items-center justify-center shadow-[0_0_20px_rgba(255,191,0,0.3)]">
+                <ShieldAlert className="w-7 h-7 text-stone-900" />
+              </div>
+              <div>
+                <h2 className="text-3xl font-serif italic text-white">War Room Briefing</h2>
+                <p className="text-[10px] text-afl-gold uppercase tracking-[0.4em] font-black">Tactical Intelligence Report</p>
+              </div>
+            </div>
+            <button 
+              onClick={onClose}
+              className="p-3 hover:bg-white/5 rounded-2xl transition-colors group"
+            >
+              <X className="w-6 h-6 text-stone-500 group-hover:text-white" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Leader Section */}
+            <div className="bg-white/5 border border-white/10 rounded-[2rem] p-6 relative overflow-hidden group hover:border-afl-gold/30 transition-all">
+              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <Trophy className="w-16 h-16 text-afl-gold" />
+              </div>
+              <p className="text-[10px] text-afl-gold uppercase tracking-widest font-black mb-4">Competition Leader</p>
+              {leader ? (
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-2xl bg-stone-800 flex items-center justify-center border border-white/5 text-2xl font-serif italic text-afl-gold">
+                    {leader.displayName[0]}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white mb-1">{leader.displayName}</h3>
+                    <div className="flex items-center gap-3">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-stone-500 uppercase font-bold">Points</span>
+                        <span className="text-lg font-black text-white leading-none">{leader.calculatedPoints}</span>
+                      </div>
+                      <div className="w-px h-6 bg-white/10" />
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-stone-500 uppercase font-bold">Margin</span>
+                        <span className="text-lg font-black text-stone-300 leading-none">{leader.calculatedMargin}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-stone-500 italic">No leader data available</p>
+              )}
+            </div>
+
+            {/* Last Place Section */}
+            <div className="bg-white/5 border border-white/10 rounded-[2rem] p-6 relative overflow-hidden group hover:border-red-500/30 transition-all">
+              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <Zap className="w-16 h-16 text-red-500" />
+              </div>
+              <p className="text-[10px] text-red-500 uppercase tracking-widest font-black mb-4">Wooden Spoon Alert</p>
+              {lastPlace ? (
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-2xl bg-stone-800 flex items-center justify-center border border-white/5 text-2xl font-serif italic text-stone-500">
+                    {lastPlace.displayName[0]}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white mb-1">{lastPlace.displayName}</h3>
+                    <p className="text-xs text-stone-500 font-medium">Currently trailing the pack</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-stone-500 italic">No data available</p>
+              )}
+            </div>
+
+            {/* Next Game Section */}
+            <div className="md:col-span-2 bg-afl-navy/50 border border-white/10 rounded-[2rem] p-8 relative overflow-hidden group hover:border-white/20 transition-all">
+              <div className="absolute top-0 right-0 p-6 opacity-5">
+                <Calendar className="w-32 h-32 text-white" />
+              </div>
+              <p className="text-[10px] text-stone-400 uppercase tracking-widest font-black mb-6">Next Tactical Engagement</p>
+              {nextGame ? (
+                <div className="flex flex-col md:flex-row items-center justify-between gap-8">
+                  <div className="flex items-center gap-8 w-full md:w-auto justify-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <span className="text-xs font-black text-white uppercase tracking-tighter">{nextGame.hometeam}</span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <span className="text-2xl font-serif italic text-afl-gold">VS</span>
+                      <span className="text-[10px] text-stone-500 font-bold uppercase mt-2">
+                        {formatInTimeZone(parseISO(nextGame.date), AWST_TIMEZONE, 'EEE h:mm a')}
+                      </span>
+                    </div>
+                    <div className="flex flex-col items-center gap-3">
+                      <span className="text-xs font-black text-white uppercase tracking-tighter">{nextGame.awayteam}</span>
+                    </div>
+                  </div>
+                  <div className="text-center md:text-right">
+                    <p className="text-sm font-serif italic text-stone-300 mb-1">{nextGame.venue}</p>
+                    <p className="text-[10px] text-stone-500 uppercase font-bold tracking-widest">Round {nextGame.round}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-stone-500 italic">No upcoming games scheduled</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-10">
+            <button 
+              onClick={onClose}
+              className="w-full py-5 bg-afl-gold text-stone-900 rounded-2xl font-black text-sm uppercase tracking-[0.2em] shadow-[0_10px_30px_rgba(255,191,0,0.2)] hover:shadow-[0_15px_40px_rgba(255,191,0,0.3)] hover:-translate-y-0.5 transition-all active:translate-y-0"
+            >
+              Acknowledge & Enter
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [games, setGames] = useState<Game[]>([]);
@@ -194,7 +431,7 @@ export default function App() {
   const [allTips, setAllTips] = useState<Tip[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentRound, setCurrentRound] = useState(1);
-  const [activeTab, setActiveTab] = useState<'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile'>('war-room');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile'>('dashboard');
   const [selectedProfileUserId, setSelectedProfileUserId] = useState<string | null>(null);
   const [profileSourceTab, setProfileSourceTab] = useState<'leaderboard' | 'results' | 'admin'>('leaderboard');
   const [standings, setStandings] = useState<StandingsItem[]>([]);
@@ -203,6 +440,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<string>('');
   const [adminSelectedRound, setAdminSelectedRound] = useState<number>(currentRound);
+  const [showWarRoomPopup, setShowWarRoomPopup] = useState(false);
+  const [hasShownWarRoom, setHasShownWarRoom] = useState(false);
   const [warRoomUserId, setWarRoomUserId] = useState<string>('');
   const [resultsUserId, setResultsUserId] = useState<string>('');
   const [resultsSubTab, setResultsSubTab] = useState<'individual' | 'round-summary'>('individual');
@@ -223,6 +462,9 @@ export default function App() {
   const [editingUserName, setEditingUserName] = useState('');
   const [editingUserFavoriteTeam, setEditingUserFavoriteTeam] = useState('');
   const [editingUserRole, setEditingUserRole] = useState<'user' | 'admin'>('user');
+  const [isFetchingTips, setIsFetchingTips] = useState(true);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isFetchingUsers, setIsFetchingUsers] = useState(true);
   const [isEditingSelf, setIsEditingSelf] = useState(false);
   const [selfDisplayName, setSelfDisplayName] = useState('');
   const [selfFavoriteTeam, setSelfFavoriteTeam] = useState('');
@@ -244,9 +486,20 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [savingTipId, setSavingTipId] = useState<number | null>(null);
+  const [pendingTips, setPendingTips] = useState<Record<number, Tip>>({});
+  const [isConfirmingPost, setIsConfirmingPost] = useState(false);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [isFetchingGames, setIsFetchingGames] = useState(true);
   const [isFetchingStandings, setIsFetchingStandings] = useState(true);
+  const [apiStatus, setApiStatus] = useState<{
+    games: 'success' | 'fallback' | 'cache' | 'error' | 'loading';
+    standings: 'success' | 'fallback' | 'cache' | 'error' | 'loading';
+    firestore: 'success' | 'error' | 'loading';
+  }>({
+    games: 'loading',
+    standings: 'loading',
+    firestore: 'loading'
+  });
 
   const [isRoundRecapOpen, setIsRoundRecapOpen] = useState(false);
   const [recapRound, setRecapRound] = useState<number>(currentRound);
@@ -390,6 +643,10 @@ Good luck in Round ${round + 1}! 🍀`;
         await syncUserProfile(firebaseUser);
         setWarRoomUserId(firebaseUser.uid);
         setResultsUserId(firebaseUser.uid);
+        if (!hasShownWarRoom) {
+          setShowWarRoomPopup(true);
+          setHasShownWarRoom(true);
+        }
       } else {
         setProfile(null);
         setWarRoomUserId('');
@@ -450,7 +707,6 @@ Good luck in Round ${round + 1}! 🍀`;
             role: firebaseUser.email === ADMIN_EMAIL ? 'admin' : 'user',
             totalPoints: 0,
             totalMargin: 0,
-            unlockedRounds: [],
             preferences: {
               emailNotifications: true,
               weeklySummary: true,
@@ -509,7 +765,19 @@ Good luck in Round ${round + 1}! 🍀`;
       await syncUserProfile(userCredential.user, authDisplayName);
     } catch (err: any) {
       console.error("Sign up error:", err);
-      setAuthError(err.message || "Failed to create account.");
+      let message = "Failed to create account.";
+      if (err.code === 'auth/email-already-in-use') {
+        message = "An account already exists with this email.";
+      } else if (err.code === 'auth/invalid-email') {
+        message = "Invalid email address.";
+      } else if (err.code === 'auth/weak-password') {
+        message = "Password should be at least 6 characters.";
+      } else if (err.code === 'auth/operation-not-allowed') {
+        message = "Email/password accounts are not enabled.";
+      } else if (err.message) {
+        message = err.message;
+      }
+      setAuthError(message);
     } finally {
       setAuthLoading(false);
     }
@@ -527,17 +795,27 @@ Good luck in Round ${round + 1}! 🍀`;
       await signInWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
       console.error("Sign in error:", err);
-      setAuthError(err.message || "Failed to sign in.");
+      let message = "Failed to sign in.";
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        message = "Invalid email or password.";
+      } else if (err.code === 'auth/invalid-email') {
+        message = "Invalid email address.";
+      } else if (err.code === 'auth/user-disabled') {
+        message = "This account has been disabled.";
+      } else if (err.message) {
+        message = err.message;
+      }
+      setAuthError(message);
     } finally {
       setAuthLoading(false);
     }
   };
 
   // Fetch Games from Squiggle
-  const fetchGames = async (isInitial = true) => {
+  const fetchGames = async (isInitial = true, retryCount = 0) => {
     if (isInitial) setIsFetchingGames(true);
     try {
-      console.log("Fetching AFL games for 2026...");
+      console.log(`Fetching AFL games for 2026 (Attempt ${retryCount + 1})...`);
       const res = await fetch("/api/games?year=2026");
       
       if (!res.ok) {
@@ -548,6 +826,11 @@ Good luck in Round ${round + 1}! 🍀`;
       const data = await res.json();
       const rawGames: any[] = data.games || [];
       console.log(`Fetched ${rawGames.length} raw games.`);
+      
+      // Check if it's fallback data (Squiggle API returns games for the requested year)
+      const isFallback = data.source === 'fallback' || (data.games && data.games.length > 0 && data.games[0].year !== 2026);
+      const isCache = data.source === 'cache';
+      setApiStatus(prev => ({ ...prev, games: isCache ? 'cache' : (isFallback ? 'fallback' : 'success') }));
       
       if (rawGames.length === 0 && isInitial) {
         console.warn("No AFL games found in response.");
@@ -607,22 +890,38 @@ Good luck in Round ${round + 1}! 🍀`;
         const upcomingGame = finalGames.find(g => new Date(g.date) > now);
         if (upcomingGame) {
           setCurrentRound(upcomingGame.round);
+          setAdminSelectedRound(upcomingGame.round);
+          setResultsSelectedRound(upcomingGame.round);
+          setRecapRound(upcomingGame.round);
         } else {
-          setCurrentRound(Math.max(...finalGames.map(g => g.round)));
+          const maxRound = Math.max(...finalGames.map(g => g.round));
+          setCurrentRound(maxRound);
+          setAdminSelectedRound(maxRound);
+          setResultsSelectedRound(maxRound);
+          setRecapRound(maxRound);
         }
       }
     } catch (err) {
       console.error("Failed to fetch games:", err);
+      
+      // Retry logic for "Failed to fetch" (network errors)
+      if (retryCount < 3 && (err instanceof Error && err.message === "Failed to fetch")) {
+        console.log(`Retrying fetchGames in 2s... (${retryCount + 1}/3)`);
+        setTimeout(() => fetchGames(isInitial, retryCount + 1), 2000);
+        return;
+      }
+
+      setApiStatus(prev => ({ ...prev, games: 'error' }));
       if (isInitial) setError(`Could not load AFL games: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       if (isInitial) setIsFetchingGames(false);
     }
   };
 
-  const fetchStandings = async () => {
+  const fetchStandings = async (retryCount = 0) => {
     setIsFetchingStandings(true);
     try {
-      console.log("Fetching AFL standings for 2026...");
+      console.log(`Fetching AFL standings for 2026 (Attempt ${retryCount + 1})...`);
       const res = await fetch("/api/standings?year=2026");
       
       if (!res.ok) {
@@ -633,6 +932,10 @@ Good luck in Round ${round + 1}! 🍀`;
       const data = await res.json();
       const rawStandings: any[] = data.standings || [];
       console.log(`Fetched ${rawStandings.length} raw standings.`);
+      
+      const isFallback = data.source === 'fallback' || (data.standings && data.standings.length > 0 && data.standings[0].year !== 2026);
+      const isCache = data.source === 'cache';
+      setApiStatus(prev => ({ ...prev, standings: isCache ? 'cache' : (isFallback ? 'fallback' : 'success') }));
       
       const processedStandings: StandingsItem[] = rawStandings.map(s => ({
         rank: s.rank,
@@ -649,6 +952,15 @@ Good luck in Round ${round + 1}! 🍀`;
       console.log(`Successfully set ${processedStandings.length} standings.`);
     } catch (err) {
       console.error("Failed to fetch standings:", err);
+      
+      // Retry logic for "Failed to fetch" (network errors)
+      if (retryCount < 3 && (err instanceof Error && err.message === "Failed to fetch")) {
+        console.log(`Retrying fetchStandings in 2s... (${retryCount + 1}/3)`);
+        setTimeout(() => fetchStandings(retryCount + 1), 2000);
+        return;
+      }
+
+      setApiStatus(prev => ({ ...prev, standings: 'error' }));
     } finally {
       setIsFetchingStandings(false);
     }
@@ -665,6 +977,19 @@ Good luck in Round ${round + 1}! 🍀`;
 
     return () => clearInterval(intervalId);
   }, []);
+
+  // Listen for Profile Updates
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (doc) => {
+      if (doc.exists()) {
+        setProfile(doc.data() as UserProfile);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+    });
+    return unsubscribe;
+  }, [user]);
 
   // Listen for Tips
   useEffect(() => {
@@ -684,21 +1009,28 @@ Good luck in Round ${round + 1}! 🍀`;
   useEffect(() => {
     if (!user || !profile) return;
     
+    setIsFetchingUsers(true);
+    setIsFetchingTips(true);
+    
     // Admins can see full user profiles, others see public profiles
     const usersPath = profile.role === 'admin' ? 'users' : 'public_profiles';
     const unsubUsers = onSnapshot(collection(db, usersPath), (snapshot) => {
       const users = snapshot.docs.map(doc => doc.data() as UserProfile);
       console.log(`Fetched ${users.length} users from ${usersPath}`);
       setAllUsers(users.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')));
+      setIsFetchingUsers(false);
     }, (error) => {
       console.error(`Failed to fetch users from ${usersPath}:`, error);
+      setIsFetchingUsers(false);
       handleFirestoreError(error, OperationType.LIST, usersPath);
     });
 
     const tipsPath = 'tips';
     const unsubTips = onSnapshot(collection(db, tipsPath), (snapshot) => {
       setAllTips(snapshot.docs.map(doc => doc.data() as Tip));
+      setIsFetchingTips(false);
     }, (error) => {
+      setIsFetchingTips(false);
       handleFirestoreError(error, OperationType.LIST, tipsPath);
     });
 
@@ -722,14 +1054,28 @@ Good luck in Round ${round + 1}! 🍀`;
     testConnection();
   }, []);
 
+  // Monitor Firestore Connectivity
+  useEffect(() => {
+    if (!db) return;
+    setApiStatus(prev => ({ ...prev, firestore: 'success' }));
+  }, [db]);
+
+  useEffect(() => {
+    setPendingTips({});
+  }, [warRoomUserId, currentRound]);
+
   const handleLogin = async () => {
     setAuthLoading(true);
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Login failed:", err);
-      setError("Login failed. Please try again.");
+      if (err.code === 'auth/invalid-credential') {
+        setError("Firebase Configuration Error: 'auth/invalid-credential'. This usually means the API key is restricted or the domain is not authorized. Please try running the Firebase setup again.");
+      } else {
+        setError(`Login failed: ${err.message || "Please try again."}`);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -749,7 +1095,7 @@ Good luck in Round ${round + 1}! 🍀`;
     if (!game) return;
 
     // Check if locked
-    const isLocked = new Date() > new Date(game.date) && !profile?.unlockedRounds?.includes(round);
+    const isLocked = new Date() > new Date(game.date);
     if (isLocked && profile?.role !== 'admin') {
       setError("This game has already started and tips are locked.");
       return;
@@ -774,6 +1120,119 @@ Good luck in Round ${round + 1}! 🍀`;
     } finally {
       setSavingTipId(null);
     }
+  };
+
+  const stageTip = (gameId: number, round: number, team: string, margin?: number) => {
+    if (!user) return;
+    
+    if (warRoomUserId !== user.uid && profile?.role !== 'admin') {
+      setError("You are not authorized to edit this player's tips.");
+      return;
+    }
+
+    const game = games.find(g => g.id === gameId);
+    if (!game) return;
+
+    // Check if locked
+    const isLocked = new Date() > new Date(game.date);
+    if (isLocked && profile?.role !== 'admin') {
+      setError("This game has already started and tips are locked.");
+      return;
+    }
+
+    const tipData: Tip = {
+      uid: warRoomUserId,
+      gameId,
+      round,
+      selectedTeam: team,
+      updatedAt: new Date().toISOString()
+    };
+    if (margin !== undefined) tipData.margin = margin;
+
+    setPendingTips(prev => ({
+      ...prev,
+      [gameId]: tipData
+    }));
+  };
+
+  const postPendingTips = () => {
+    if (Object.keys(pendingTips).length === 0) return;
+    setIsConfirmingPost(true);
+  };
+
+  const handlePrint = () => {
+    console.log("Print initiated. allGamesTipped:", allGamesTipped);
+    if (!allGamesTipped) {
+      console.warn("Print blocked: Not all games tipped.");
+      return;
+    }
+
+    try {
+      // Ensure the window has focus before printing
+      window.focus();
+      window.print();
+    } catch (err) {
+      console.error("Print failed:", err);
+      setError("Printing failed. This might be due to browser security settings in the preview. Try opening the app in a new tab to print.");
+    }
+  };
+
+  const finalizePostTips = async () => {
+    const tipsToPost = Object.values(pendingTips) as Tip[];
+    if (tipsToPost.length === 0) return;
+    
+    setIsActionLoading(true);
+    try {
+      const batch = tipsToPost.map(tipData => {
+        const tipId = `${tipData.uid}_${tipData.gameId}`;
+        return setDoc(doc(db, 'tips', tipId), tipData);
+      });
+      await Promise.all(batch);
+      setPendingTips({});
+      setIsConfirmingPost(false);
+    } catch (err) {
+      console.error("Failed to post tips:", err);
+      setError("Failed to save tips. Check your connection.");
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const downloadTipsCSV = () => {
+    const headers = ['Round', 'Player', 'Email', 'Game', 'Selected Team', 'Margin', 'Updated At'];
+    const rows = allTips.map(tip => {
+      const user = allUsers.find(u => u.uid === tip.uid);
+      const game = games.find(g => g.id === tip.gameId);
+      return [
+        tip.round,
+        user?.displayName || 'Unknown',
+        user?.email || 'Unknown',
+        game ? `${game.hometeam} v ${game.awayteam}` : 'Unknown',
+        tip.selectedTeam,
+        tip.margin !== undefined ? tip.margin : '',
+        tip.updatedAt
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `afl_tips_report_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const cancelPendingTips = () => {
+    setPendingTips({});
+    setIsConfirmingPost(false);
   };
 
   const leaderboardData = useMemo(() => {
@@ -853,6 +1312,17 @@ Good luck in Round ${round + 1}! 🍀`;
       return a.calculatedMargin - b.calculatedMargin;
     });
   }, [allUsers, allTips, games, leaderboardSort]);
+
+  const leader = useMemo(() => leaderboardData.find(u => u.rank === 1), [leaderboardData]);
+  const lastPlace = useMemo(() => {
+    if (leaderboardData.length === 0) return null;
+    const maxRank = Math.max(...leaderboardData.map(u => u.rank));
+    return leaderboardData.find(u => u.rank === maxRank);
+  }, [leaderboardData]);
+  const nextGame = useMemo(() => {
+    const now = new Date();
+    return games.find(g => new Date(g.date) > now);
+  }, [games]);
 
   const roundSummaryData = useMemo(() => {
     const data = allUsers.map(u => {
@@ -1106,7 +1576,7 @@ Good luck in Round ${round + 1}! 🍀`;
     document.body.removeChild(link);
   };
 
-  const randomiseRound = async () => {
+  const randomiseRound = () => {
     if (!user || !roundGames.length) return;
     
     if (warRoomUserId !== user.uid && profile?.role !== 'admin') {
@@ -1114,15 +1584,14 @@ Good luck in Round ${round + 1}! 🍀`;
       return;
     }
 
-    setIsActionLoading(true);
-    const batch = roundGames.map(game => {
-      const isLocked = new Date() > new Date(game.date) && !profile?.unlockedRounds?.includes(game.round);
-      if (isLocked && profile?.role !== 'admin') return null;
+    const newPending: Record<number, Tip> = { ...pendingTips };
+    roundGames.forEach(game => {
+      const isLocked = new Date() > new Date(game.date);
+      if (isLocked && profile?.role !== 'admin') return;
 
       const randomWinner = Math.random() > 0.5 ? game.hometeam : game.awayteam;
       const randomMargin = game.isFirstInRound ? Math.floor(Math.random() * 40) + 1 : undefined;
       
-      const tipId = `${warRoomUserId}_${game.id}`;
       const tipData: Tip = {
         uid: warRoomUserId,
         gameId: game.id,
@@ -1132,17 +1601,10 @@ Good luck in Round ${round + 1}! 🍀`;
       };
       if (randomMargin !== undefined) tipData.margin = randomMargin;
       
-      return setDoc(doc(db, 'tips', tipId), tipData);
-    }).filter(Boolean);
+      newPending[game.id] = tipData;
+    });
 
-    try {
-      await Promise.all(batch);
-    } catch (err) {
-      console.error("Randomise failed:", err);
-      setError("Failed to randomise tips.");
-    } finally {
-      setIsActionLoading(false);
-    }
+    setPendingTips(newPending);
   };
 
   const handleAdminTipUpdate = async (gameId: number, selectedTeam: string, margin?: number) => {
@@ -1217,8 +1679,7 @@ Good luck in Round ${round + 1}! 🍀`;
       email: newUserEmail.trim().toLowerCase(),
       role: newUserRole,
       totalPoints: 0,
-      totalMargin: 0,
-      unlockedRounds: []
+      totalMargin: 0
     };
 
     try {
@@ -1322,6 +1783,7 @@ Good luck in Round ${round + 1}! 🍀`;
     }
   };
 
+
   const roundGames = games.filter(g => g.round === currentRound);
   const activeGameId = useMemo(() => {
     const now = new Date();
@@ -1336,7 +1798,37 @@ Good luck in Round ${round + 1}! 🍀`;
     return nextGame?.id || null;
   }, [roundGames]);
 
-  const warRoomTips = allTips.filter(t => t.uid === warRoomUserId);
+  const warRoomTips = useMemo(() => {
+    // Use the more reactive 'tips' state if we're looking at the current user's tips
+    const baseTips = warRoomUserId === user?.uid 
+      ? tips 
+      : allTips.filter(t => t.uid === warRoomUserId);
+    
+    // Merge with pending tips
+    const mergedTips = [...baseTips];
+    (Object.values(pendingTips) as Tip[]).forEach(pendingTip => {
+      if (pendingTip.uid === warRoomUserId) {
+        const index = mergedTips.findIndex(t => t.gameId === pendingTip.gameId);
+        if (index !== -1) {
+          mergedTips[index] = pendingTip;
+        } else {
+          mergedTips.push(pendingTip);
+        }
+      }
+    });
+    return mergedTips;
+  }, [allTips, tips, warRoomUserId, user?.uid, pendingTips]);
+
+  const allGamesTipped = useMemo(() => {
+    if (roundGames.length === 0) return false;
+    const tippedCount = roundGames.filter(game => warRoomTips.some(t => t.gameId === game.id)).length;
+    console.log(`Tipping progress: ${tippedCount}/${roundGames.length}`);
+    return tippedCount === roundGames.length;
+  }, [roundGames, warRoomTips]);
+
+  const tippedCount = useMemo(() => {
+    return roundGames.filter(game => warRoomTips.some(t => t.gameId === game.id)).length;
+  }, [roundGames, warRoomTips]);
   
   const accentColor = useMemo(() => {
     if (profile?.favoriteTeam && AFL_TEAM_COLORS[profile.favoriteTeam]) {
@@ -1393,7 +1885,7 @@ Good luck in Round ${round + 1}! 🍀`;
         <div className="max-w-md w-full bg-white dark:bg-stone-900 p-8 rounded-2xl shadow-xl border border-black/5 dark:border-white/5 transition-colors relative z-10">
           <div className="text-center mb-8">
             <Trophy className="w-16 h-16 text-afl-gold mx-auto mb-6" />
-            <h1 className="text-4xl font-serif italic mb-2 text-stone-900 dark:text-stone-100">Adrian's Tipping Page</h1>
+            <h1 className="text-4xl font-serif italic mb-2 text-stone-900 dark:text-stone-100">Family and Friends AFL Tipping</h1>
             <p className="text-stone-500 dark:text-stone-400 font-sans">AFL 2026 Season • Family & Friends</p>
           </div>
 
@@ -1494,10 +1986,17 @@ Good luck in Round ${round + 1}! 🍀`;
 
   return (
     <div className="min-h-screen bg-[#F5F5F0] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans transition-colors duration-300">
-      {/* Header */}
-      <header className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-b border-stone-200 dark:border-stone-800 sticky top-0 z-50 transition-colors duration-300">
-        <div className="max-w-5xl mx-auto px-4 h-20 flex items-center justify-between">
+      <div className="print:hidden flex flex-col min-h-screen">
+        {/* Header */}
+      <header className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-b border-stone-200 dark:border-stone-800 sticky top-0 z-50 transition-colors duration-300 w-full">
+        <div className="px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="lg:hidden p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-xl transition-colors"
+            >
+              <Menu className="w-6 h-6 text-stone-600 dark:text-stone-400" />
+            </button>
             <div 
               className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg transition-all"
               style={{ 
@@ -1508,71 +2007,11 @@ Good luck in Round ${round + 1}! 🍀`;
               <Trophy className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-serif italic tracking-tight dark:text-stone-100">Adrian's Tipping</h1>
+              <h1 className="text-xl font-serif italic tracking-tight dark:text-stone-100">Family and Friends AFL Tipping</h1>
               <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">2026 Season</p>
             </div>
           </div>
           
-          <nav className="hidden md:flex items-center gap-1 bg-stone-100 dark:bg-stone-800/50 p-1 rounded-2xl">
-            {[
-              { id: 'war-room', label: 'Tips', icon: Calendar },
-              { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
-              { id: 'standings', label: 'AFL Ladder', icon: LayoutGrid },
-              { id: 'results', label: 'Results', icon: CheckCircle2 },
-            ].map((tab) => {
-              const hasLiveGames = tab.id === 'war-room' && games.some(g => new Date() > new Date(g.date) && !g.isFinished);
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
-                  className={cn(
-                    "px-6 py-2.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 relative overflow-hidden",
-                    activeTab === tab.id 
-                      ? "text-white shadow-md" 
-                      : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-white dark:hover:bg-stone-800"
-                  )}
-                  style={activeTab === tab.id ? { 
-                    backgroundColor: accentColor,
-                    boxShadow: `0 4px 12px ${accentColor}40`
-                  } : {}}
-                >
-                  <tab.icon className={cn("w-4 h-4", activeTab === tab.id ? "text-white" : "text-stone-400")} />
-                  {tab.label}
-                  {hasLiveGames && (
-                    <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
-                  )}
-                  {activeTab === tab.id && (
-                    <motion.div 
-                      layoutId="nav-glow"
-                      className="absolute inset-0 bg-white/20"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ duration: 0.3 }}
-                    />
-                  )}
-                </button>
-              );
-            })}
-            {profile?.role === 'admin' && (
-              <button 
-                onClick={() => setActiveTab('admin')}
-                className={cn(
-                  "px-6 py-2.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 relative overflow-hidden",
-                  activeTab === 'admin' 
-                    ? "text-white shadow-md" 
-                    : "text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-white dark:hover:bg-stone-800"
-                )}
-                style={activeTab === 'admin' ? { 
-                  backgroundColor: accentColor,
-                  boxShadow: `0 4px 12px ${accentColor}40`
-                } : {}}
-              >
-                <Shield className={cn("w-4 h-4", activeTab === 'admin' ? "text-white" : "text-stone-400")} />
-                Admin
-              </button>
-            )}
-          </nav>
-
           <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block">
               {isEditingSelf ? (
@@ -1591,7 +2030,7 @@ Good luck in Round ${round + 1}! 🍀`;
                     className="p-1 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded text-[10px] font-bold outline-none focus:ring-1 focus:ring-afl-accent text-stone-900 dark:text-stone-100"
                   >
                     <option value="">No Team</option>
-                    {Object.keys(AFL_TEAM_COLORS).map(team => (
+                    {AFL_TEAMS.map(team => (
                       <option key={team} value={team}>{team}</option>
                     ))}
                   </select>
@@ -1660,7 +2099,124 @@ Good luck in Round ${round + 1}! 🍀`;
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <div className="flex flex-1">
+        {/* Mobile Backdrop */}
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[55] lg:hidden"
+            />
+          )}
+        </AnimatePresence>
+
+        {/* Sidebar */}
+        <aside className={cn(
+          "w-72 bg-afl-navy text-white flex flex-col fixed lg:sticky top-0 lg:top-20 h-screen lg:h-[calc(100vh-5rem)] z-[60] lg:z-40 border-r border-white/10 transition-transform duration-300 ease-in-out",
+          isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+        )}>
+          <div className="lg:hidden p-6 border-b border-white/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Trophy className="w-6 h-6 text-afl-accent" />
+              <span className="font-serif italic text-lg">Menu</span>
+            </div>
+            <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-white/10 rounded-xl transition-colors">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          <nav className="flex flex-col gap-2 p-6">
+            <p className="text-[10px] font-bold text-stone-500 uppercase tracking-[0.2em] mb-4 ml-4">Command Center</p>
+            {[
+              { id: 'dashboard', label: 'Overview', icon: LayoutGrid },
+              { id: 'war-room', label: 'Tips', icon: Calendar },
+              { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
+              { id: 'standings', label: 'AFL Ladder', icon: BarChart3 },
+              { id: 'results', label: 'Results', icon: CheckCircle2 },
+            ].map((tab) => {
+              const hasLiveGames = tab.id === 'war-room' && games.some(g => new Date() > new Date(g.date) && !g.isFinished);
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id as any);
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={cn(
+                    "w-full px-4 py-3.5 rounded-2xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
+                    activeTab === tab.id 
+                      ? "text-white shadow-lg" 
+                      : "text-stone-400 hover:text-white hover:bg-white/5"
+                  )}
+                  style={activeTab === tab.id ? { 
+                    backgroundColor: accentColor,
+                    boxShadow: `0 8px 20px ${accentColor}30`
+                  } : {}}
+                >
+                  <tab.icon className={cn("w-5 h-5 transition-colors", activeTab === tab.id ? "text-white" : "text-stone-500 group-hover:text-stone-300")} />
+                  {tab.label}
+                  {hasLiveGames && (
+                    <span className="absolute top-4 right-4 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                  )}
+                  {activeTab === tab.id && (
+                    <motion.div 
+                      layoutId="sidebar-active"
+                      className="absolute inset-0 bg-white/5"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+            
+            {profile?.role === 'admin' && (
+              <>
+                <div className="h-px bg-white/10 my-4 mx-4" />
+                <p className="text-[10px] font-bold text-stone-500 uppercase tracking-[0.2em] mb-4 ml-4">Administration</p>
+                <button 
+                  onClick={() => {
+                    setActiveTab('admin');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={cn(
+                    "w-full px-4 py-3.5 rounded-2xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
+                    activeTab === 'admin' 
+                      ? "text-white shadow-lg" 
+                      : "text-stone-400 hover:text-white hover:bg-white/5"
+                  )}
+                  style={activeTab === 'admin' ? { 
+                    backgroundColor: accentColor,
+                    boxShadow: `0 8px 20px ${accentColor}30`
+                  } : {}}
+                >
+                  <Shield className={cn("w-5 h-5 transition-colors", activeTab === 'admin' ? "text-white" : "text-stone-500 group-hover:text-stone-300")} />
+                  Admin Controls
+                </button>
+              </>
+            )}
+          </nav>
+          
+          <div className="mt-auto p-6 border-t border-white/5">
+            <div className="bg-white/5 rounded-2xl p-4">
+              <p className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-2">System Status</p>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-[10px] text-stone-300 font-mono">Cloud Sync Active</span>
+                </div>
+                <span className="text-[8px] text-stone-600 font-mono mt-1">Build: 2026.04.11.0204</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        {/* Content Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <main className="px-6 py-8 flex-1">
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -1685,217 +2241,262 @@ Good luck in Round ${round + 1}! 🍀`;
           </div>
         )}
 
-        {activeTab === 'war-room' && (
-          <div className="space-y-8">
-            {/* Live Scores Ticker */}
-            {games.filter(g => new Date() > new Date(g.date) && !g.isFinished).length > 0 && (
-              <div className="relative overflow-hidden bg-stone-900/40 dark:bg-stone-900/60 backdrop-blur-md rounded-3xl border border-white/5 p-4 shadow-xl">
-                <div className="flex items-center gap-3 mb-3 px-2">
-                  <div className="flex items-center gap-2 px-2 py-1 bg-red-500/20 border border-red-500/30 rounded-lg">
-                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
-                    <span className="text-[10px] font-black uppercase text-red-500 tracking-wider">Live Scores</span>
-                  </div>
-                  <div className="h-px flex-1 bg-gradient-to-r from-white/10 to-transparent" />
-                </div>
-                <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide mask-fade-right">
-                  {games
-                    .filter(g => new Date() > new Date(g.date) && !g.isFinished)
-                    .map(g => (
-                      <div 
-                        key={g.id}
-                        className="flex-shrink-0 min-w-[200px] bg-white/5 border border-white/10 rounded-2xl p-3 flex flex-col gap-2 hover:bg-white/10 transition-all cursor-pointer group"
-                        onClick={() => {
-                          setCurrentRound(g.round);
-                          setExpandedGameId(g.id);
-                          const el = document.getElementById(`game-${g.id}`);
-                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }}
-                      >
-                        <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 uppercase tracking-widest">
-                          <span>{g.timestr || 'Live'}</span>
-                          <span className="text-afl-gold">{g.complete}%</span>
-                        </div>
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="flex flex-col gap-1 flex-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs font-bold truncate" style={{ color: AFL_TEAM_COLORS[g.hometeam] }}>{g.hometeam}</span>
-                              <span className="text-sm font-serif italic text-white">{g.hscore}</span>
-                            </div>
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs font-bold truncate" style={{ color: AFL_TEAM_COLORS[g.awayteam] }}>{g.awayteam}</span>
-                              <span className="text-sm font-serif italic text-white">{g.ascore}</span>
-                            </div>
-                          </div>
-                          <div className="w-px h-8 bg-white/10" />
-                          <div className="flex flex-col items-center justify-center min-w-[40px]">
-                            <span className="text-[10px] font-black text-afl-gold">
-                              {Math.abs((g.hscore || 0) - (g.ascore || 0))}
-                            </span>
-                            <span className="text-[8px] font-bold text-stone-500 uppercase">Diff</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                </div>
+        {activeTab === 'dashboard' && (
+          <div className="space-y-8 animate-in fade-in duration-500">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+              <div>
+                <h2 className="text-4xl font-serif italic text-stone-900 dark:text-stone-100">
+                  Welcome back, {profile?.displayName?.split(' ')[0] || 'Player'}
+                </h2>
+                <p className="text-stone-500 dark:text-stone-400 font-mono text-xs uppercase tracking-[0.3em] mt-1">Season 2026 Overview</p>
               </div>
-            )}
-
-            {/* Enter Your Tips Header & Sliding Bar */}
-            <div className="bg-stone-900 text-white p-6 rounded-3xl shadow-2xl border border-white/10 overflow-hidden relative">
-              <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
-                <Zap className="w-32 h-32 text-afl-gold" />
-              </div>
-                           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 relative z-10">
-                  <div>
-                    <h2 className="text-4xl font-serif italic text-afl-navy dark:text-afl-gold">Enter Your Tips</h2>
-                    <p className="text-stone-400 text-xs uppercase tracking-[0.3em] font-mono mt-1">Tactical Selection Command</p>
-                  </div>
-                  
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
-                      <User className="w-4 h-4 text-stone-400" />
-                      <select 
-                        value={warRoomUserId}
-                        onChange={(e) => setWarRoomUserId(e.target.value)}
-                        className="bg-transparent text-sm font-bold outline-none cursor-pointer"
-                      >
-                        {allUsers.map(u => (
-                          <option key={u.uid} value={u.uid} className="bg-stone-900 text-white">
-                            {u.displayName} {u.uid === user?.uid ? '(You)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <button 
-                      onClick={randomiseRound}
-                      disabled={isActionLoading}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-sm font-bold transition-all group disabled:opacity-50"
-                    >
-                      {isActionLoading ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-afl-accent"></div>
-                      ) : (
-                        <Dices className="w-4 h-4 text-afl-accent group-hover:rotate-12 transition-transform" />
-                      )}
-                      Randomise
-                    </button>
-                  </div>
-                </div>
-
-                {/* Round Selection Slider */}
-                <div className="mb-8">
-                  <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
-                    {rounds.map(r => (
-                      <button
-                        key={r}
-                        onClick={() => setCurrentRound(r)}
-                        className={cn(
-                          "flex-shrink-0 min-w-[70px] h-16 rounded-2xl flex flex-col items-center justify-center transition-all border",
-                          currentRound === r 
-                            ? "bg-afl-accent text-white border-afl-accent shadow-[0_0_20px_rgba(0,138,171,0.4)]" 
-                            : "bg-white/5 text-stone-400 border-white/10 hover:border-white/20"
-                        )}
-                      >
-                        <span className="text-[9px] uppercase tracking-wider font-mono opacity-60">
-                          {r === 0 ? 'Open' : r >= 25 ? 'Final' : 'Round'}
-                        </span>
-                        <span className="text-lg font-bold">
-                          {r === 0 ? 'OR' : r === 25 ? 'F1' : r === 26 ? 'SF' : r === 27 ? 'PF' : r === 28 ? 'GF' : r}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Sliding Selections Bar */}
-              <div className="relative">
-                <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide mask-fade-right">
-                  {roundGames.map(game => {
-                    const gameTip = warRoomTips.find(t => t.gameId === game.id);
-                    const isLocked = new Date() > new Date(game.date) && !profile?.unlockedRounds?.includes(game.round);
-                    
-                    return (
-                      <div 
-                        key={game.id}
-                        className={cn(
-                          "flex-shrink-0 w-48 p-3 rounded-2xl border transition-all cursor-pointer",
-                          gameTip 
-                            ? "bg-afl-navy/20 border-afl-accent/40" 
-                            : "bg-white/5 border-white/10 hover:border-white/20"
-                        )}
-                        onClick={() => setExpandedGameId(expandedGameId === game.id ? null : game.id)}
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-[9px] font-mono text-stone-500 uppercase">{formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE h:mm a')}</span>
-                          {gameTip && <CheckCircle2 className="w-3 h-3 text-afl-accent" />}
-                        </div>
-                        <div className="space-y-1">
-                          <div 
-                            className={cn("text-xs font-bold truncate")}
-                            style={{ color: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : undefined }}
-                          >
-                            {game.hometeam}
-                          </div>
-                          <div 
-                            className={cn("text-xs font-bold truncate")}
-                            style={{ color: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : undefined }}
-                          >
-                            {game.awayteam}
-                          </div>
-                          {game.isFirstInRound && (
-                            <div className="mt-2 pt-2 border-t border-stone-100 dark:border-stone-800">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[8px] font-black uppercase text-afl-gold">Margin</span>
-                                <div className="flex items-center gap-1">
-                                  <button 
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const current = gameTip?.margin || 0;
-                                      saveTip(game.id, game.round, gameTip?.selectedTeam || '', Math.max(0, current - 10));
-                                    }}
-                                    className="p-0.5 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors"
-                                    title="Decrease by 10"
-                                  >
-                                    <Minus className="w-2 h-2" />
-                                  </button>
-                                  <input 
-                                    type="number"
-                                    placeholder="Pts"
-                                    value={gameTip?.margin || ''}
-                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                      const val = parseInt(e.target.value);
-                                      saveTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : val);
-                                    }}
-                                    className="w-12 text-center text-[10px] font-bold bg-transparent outline-none border-b border-stone-200 focus:border-afl-accent"
-                                  />
-                                  <button 
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const current = gameTip?.margin || 0;
-                                      saveTip(game.id, game.round, gameTip?.selectedTeam || '', current + 10);
-                                    }}
-                                    className="p-0.5 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors"
-                                    title="Increase by 10"
-                                  >
-                                    <Plus className="w-2 h-2" />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+              <div className="flex items-center gap-3">
+                <div className="bg-white dark:bg-stone-900 px-6 py-3 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Current Round</p>
+                  <p className="text-xl font-serif font-bold text-afl-accent">Round {currentRound}</p>
                 </div>
               </div>
             </div>
 
+            <motion.div 
+              initial="hidden"
+              animate="visible"
+              variants={{
+                hidden: { opacity: 0 },
+                visible: {
+                  opacity: 1,
+                  transition: {
+                    staggerChildren: 0.1
+                  }
+                }
+              }}
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+            >
+              {/* Tipping Progress */}
+              <motion.div 
+                variants={{
+                  hidden: { opacity: 0, y: 20 },
+                  visible: { opacity: 1, y: 0 }
+                }}
+                className="lg:col-span-2 bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 p-8 shadow-xl relative overflow-hidden group"
+              >
+                <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
+                  <Calendar className="w-32 h-32" />
+                </div>
+                <div className="relative z-10">
+                  <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400 mb-6">Round {currentRound} Progress</h3>
+                  <div className="flex items-end justify-between mb-4">
+                    <div>
+                      <span className="text-5xl font-serif font-bold text-stone-900 dark:text-stone-100">{tippedCount}</span>
+                      <span className="text-xl text-stone-400 ml-2">/ {roundGames.length} Tips</span>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-bold text-stone-500 uppercase">Completion</p>
+                      <p className="text-lg font-mono font-bold text-afl-accent">{Math.round((tippedCount / roundGames.length) * 100)}%</p>
+                    </div>
+                  </div>
+                  <div className="w-full h-3 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(tippedCount / roundGames.length) * 100}%` }}
+                      className="h-full bg-afl-accent shadow-[0_0_15px_rgba(255,193,7,0.4)]"
+                      transition={{ duration: 1, ease: "easeOut" }}
+                    />
+                  </div>
+                  <button 
+                    onClick={() => setActiveTab('war-room')}
+                    className="mt-8 w-full py-4 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-800 dark:hover:bg-white transition-all flex items-center justify-center gap-2 group"
+                  >
+                    Go to War Room <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                  </button>
+                </div>
+              </motion.div>
+
+              {/* Next Game Card */}
+              <motion.div 
+                variants={{
+                  hidden: { opacity: 0, y: 20 },
+                  visible: { opacity: 1, y: 0 }
+                }}
+                className="lg:col-span-2 bg-afl-navy text-white rounded-3xl border border-white/10 p-8 shadow-xl relative overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-afl-navy via-stone-900 to-black opacity-50" />
+                <div className="relative z-10 h-full flex flex-col">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400">Up Next</h3>
+                    <div className="flex items-center gap-2 px-3 py-1 bg-red-500/20 text-red-400 rounded-full text-[10px] font-bold uppercase animate-pulse">
+                      <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                      Live Soon
+                    </div>
+                  </div>
+                  
+                  {nextGame ? (
+                    <div className="flex-1 flex flex-col justify-center">
+                      <div className="flex items-center justify-between gap-4 mb-6">
+                        <div className="text-center flex-1">
+                          <div className="w-16 h-16 mx-auto rounded-2xl bg-white/5 flex items-center justify-center mb-3 border border-white/10">
+                            <span className="text-2xl font-black">{nextGame.hometeam.charAt(0)}</span>
+                          </div>
+                          <p className="text-sm font-bold truncate">{nextGame.hometeam}</p>
+                        </div>
+                        <div className="text-center px-4">
+                          <p className="text-2xl font-serif italic text-stone-500">vs</p>
+                        </div>
+                        <div className="text-center flex-1">
+                          <div className="w-16 h-16 mx-auto rounded-2xl bg-white/5 flex items-center justify-center mb-3 border border-white/10">
+                            <span className="text-2xl font-black">{nextGame.awayteam.charAt(0)}</span>
+                          </div>
+                          <p className="text-sm font-bold truncate">{nextGame.awayteam}</p>
+                        </div>
+                      </div>
+                      <div className="text-center space-y-1">
+                        <p className="text-xs font-bold text-afl-gold uppercase tracking-widest">{nextGame.venue}</p>
+                        <p className="text-xl font-mono font-bold">{formatInTimeZone(parseISO(nextGame.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-stone-500 italic font-serif">
+                      No upcoming games scheduled.
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+
+              {/* Leaderboard Snapshot */}
+              <motion.div 
+                variants={{
+                  hidden: { opacity: 0, y: 20 },
+                  visible: { opacity: 1, y: 0 }
+                }}
+                className="lg:col-span-2 bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 p-8 shadow-xl"
+              >
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400">Leaderboard Top 3</h3>
+                  <button onClick={() => setActiveTab('leaderboard')} className="text-[10px] font-bold text-afl-accent uppercase hover:underline">View All</button>
+                </div>
+                <div className="space-y-4">
+                  {leaderboardData.slice(0, 3).map((u, i) => (
+                    <div key={u.uid} className="flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800 group hover:border-afl-accent/30 transition-all">
+                      <div className="flex items-center gap-4">
+                        <span className="text-2xl font-serif italic text-stone-300 dark:text-stone-700">0{i + 1}</span>
+                        <div>
+                          <p className="text-sm font-bold text-stone-900 dark:text-stone-100">{u.displayName}</p>
+                          <p className="text-[10px] text-stone-400 uppercase">{u.favoriteTeam || 'No Team'}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-serif font-bold text-afl-accent">{u.calculatedPoints}</p>
+                        <p className="text-[8px] text-stone-400 uppercase font-bold">Points</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+
+              {/* AFL Ladder Snapshot */}
+              <motion.div 
+                variants={{
+                  hidden: { opacity: 0, y: 20 },
+                  visible: { opacity: 1, y: 0 }
+                }}
+                className="lg:col-span-2 bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 p-8 shadow-xl"
+              >
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400">AFL Top 4</h3>
+                  <button onClick={() => setActiveTab('standings')} className="text-[10px] font-bold text-afl-accent uppercase hover:underline">Full Ladder</button>
+                </div>
+                <div className="space-y-4">
+                  {standings.slice(0, 4).map((s, i) => (
+                    <div key={s.name} className="flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+                      <div className="flex items-center gap-4">
+                        <span className="text-xl font-serif italic text-stone-300 dark:text-stone-700">0{i + 1}</span>
+                        <p className="text-sm font-bold text-stone-900 dark:text-stone-100">{s.name}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-mono font-bold text-stone-600 dark:text-stone-400">{s.pts}</p>
+                        <p className="text-[8px] text-stone-400 uppercase font-bold">Pts</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            </motion.div>
+          </div>
+        )}
+
+        {activeTab === 'war-room' && (
+          <div className="space-y-8">
+            {/* War Room Header */}
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+              <div className="flex-1 overflow-hidden">
+                <div className="flex items-center gap-2 mb-3">
+                  <Calendar className="w-4 h-4 text-stone-400" />
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Select Round</span>
+                </div>
+                <div className="flex items-center gap-3 overflow-x-auto pb-2 custom-scrollbar">
+                  {rounds.map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setCurrentRound(r)}
+                      className={cn(
+                        "flex-shrink-0 px-6 py-2.5 rounded-xl text-xs font-bold transition-all border",
+                        currentRound === r
+                          ? "text-white border-transparent shadow-lg"
+                          : "bg-white dark:bg-stone-900 text-stone-500 border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700"
+                      )}
+                      style={currentRound === r ? { 
+                        backgroundColor: accentColor,
+                        boxShadow: `0 4px 12px ${accentColor}40`
+                      } : {}}
+                    >
+                      {getRoundLabel(r)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="flex flex-wrap items-center gap-3 pb-2">
+                <div className="flex items-center gap-2 bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 rounded-xl px-3 py-2.5 shadow-sm">
+                  <User className="w-4 h-4 text-stone-400" />
+                  <select 
+                    value={warRoomUserId}
+                    onChange={(e) => setWarRoomUserId(e.target.value)}
+                    className="bg-transparent text-sm font-bold outline-none cursor-pointer text-stone-900 dark:text-stone-100"
+                  >
+                    {allUsers.map(u => (
+                      <option key={u.uid} value={u.uid} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">
+                        {u.displayName} {u.uid === user?.uid ? '(You)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button 
+                  onClick={randomiseRound}
+                  disabled={isActionLoading}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-white dark:bg-stone-900 hover:bg-stone-50 dark:hover:bg-stone-800 border border-stone-100 dark:border-stone-800 rounded-xl text-sm font-bold transition-all group disabled:opacity-50 shadow-sm"
+                >
+                  {isActionLoading ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-afl-accent"></div>
+                  ) : (
+                    <Dices className="w-4 h-4 text-afl-accent group-hover:rotate-12 transition-transform" />
+                  )}
+                  <span className="text-stone-900 dark:text-stone-100">Randomise</span>
+                </button>
+              </div>
+            </div>
+
+            {(isFetchingTips || isFetchingUsers || isFetchingGames || isActionLoading) && (
+              <div className="flex items-center justify-center gap-3 p-4 bg-stone-900/40 backdrop-blur-md border border-white/10 rounded-2xl animate-pulse">
+                <Loader2 className="w-5 h-5 text-afl-accent animate-spin" />
+                <span className="text-sm font-medium text-stone-400">Syncing tactical data...</span>
+              </div>
+            )}
             {/* Main Game Cards */}
-            <div className="grid gap-6">
+            <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
               {roundGames.map(game => {
                 const gameTip = warRoomTips.find(t => t.gameId === game.id);
-                const isLocked = new Date() > new Date(game.date) && !profile?.unlockedRounds?.includes(game.round);
+                const isLocked = new Date() > new Date(game.date);
                 const hasStarted = new Date() > new Date(game.date);
                 const isFinished = game.isFinished;
                 const isOngoing = hasStarted && !isFinished;
@@ -1911,7 +2512,7 @@ Good luck in Round ${round + 1}! 🍀`;
                     animate={{ opacity: 1, y: 0 }}
                     whileHover={{ y: -4 }}
                     className={cn(
-                      "relative bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm transition-all cursor-pointer",
+                      "relative bg-afl-navy text-white rounded-3xl border border-white overflow-hidden shadow-sm transition-all cursor-pointer",
                       isActive && "ring-2 ring-afl-accent ring-offset-4 dark:ring-offset-stone-950 border-transparent shadow-xl shadow-afl-accent/10"
                     )}
                     style={{
@@ -1947,35 +2548,49 @@ Good luck in Round ${round + 1}! 🍀`;
                       }}
                     />
 
-                    <div className="p-4 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between bg-stone-50/30 dark:bg-stone-900/30 relative z-10">
+                    <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/5 relative z-10">
                       <div className="flex items-center gap-3">
                         <Clock className="w-4 h-4 text-stone-400" />
-                        <span className="text-xs font-medium text-stone-500 dark:text-stone-400">
+                        <span className="text-xs font-medium text-stone-300">
                           {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')} AWST • {game.venue}
                         </span>
-                        {isOngoing && (
-                          <div className="flex items-center gap-2">
-                            <span 
-                              className="flex items-center gap-1 px-2 py-0.5 text-white rounded text-[8px] font-black uppercase tracking-tighter animate-pulse shadow-sm"
-                              style={{ 
-                                background: `linear-gradient(90deg, ${accentColor}, #FF4444)`
-                              }}
-                            >
-                              <Zap className="w-2 h-2 fill-white" /> Live Now
+                        
+                        {/* Status Badges */}
+                        <div className="flex items-center gap-2">
+                          {isFinished ? (
+                            <span className="px-2 py-0.5 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 rounded text-[8px] font-black uppercase tracking-tighter border border-stone-200 dark:border-stone-700 shadow-sm">
+                              Completed
                             </span>
-                            <span className="text-[10px] font-black text-afl-gold uppercase tracking-widest bg-stone-100 dark:bg-stone-800 px-2 py-0.5 rounded">
-                              {game.timestr || 'Ongoing'} • {game.complete}%
-                            </span>
-                          </div>
-                        )}
-                        {isActive && !isOngoing && !isFinished && (
-                          <span 
-                            className="flex items-center gap-1 px-2 py-0.5 text-white rounded text-[8px] font-black uppercase tracking-tighter shadow-sm"
-                            style={{ backgroundColor: accentColor }}
-                          >
-                            Next Up
-                          </span>
-                        )}
+                          ) : isOngoing ? (
+                            <div className="flex items-center gap-2">
+                              <span 
+                                className="flex items-center gap-1 px-2 py-0.5 text-white rounded text-[8px] font-black uppercase tracking-tighter animate-pulse shadow-sm"
+                                style={{ 
+                                  background: `linear-gradient(90deg, ${accentColor}, #FF4444)`
+                                }}
+                              >
+                                <Zap className="w-2 h-2 fill-white" /> In Progress
+                              </span>
+                              <span className="text-[10px] font-black text-afl-gold uppercase tracking-widest bg-stone-100 dark:bg-stone-800 px-2 py-0.5 rounded">
+                                {game.timestr || 'Ongoing'} • {game.complete}%
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 bg-blue-500/10 text-blue-500 rounded text-[8px] font-black uppercase tracking-tighter border border-blue-500/20">
+                                Upcoming
+                              </span>
+                              {isActive && (
+                                <span 
+                                  className="flex items-center gap-1 px-2 py-0.5 text-white rounded text-[8px] font-black uppercase tracking-tighter shadow-sm"
+                                  style={{ backgroundColor: accentColor }}
+                                >
+                                  Next Up
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-3">
                         {game.isFirstInRound && (
@@ -1991,11 +2606,11 @@ Good luck in Round ${round + 1}! 🍀`;
                           </div>
                         )}
                         {isLocked ? (
-                          <div className="flex items-center gap-1.5 px-2 py-1 bg-stone-200 dark:bg-stone-800 rounded text-[10px] font-bold text-stone-600 dark:text-stone-400 uppercase">
+                          <div className="flex items-center gap-1.5 px-2 py-1 bg-white/10 rounded text-[10px] font-bold text-stone-300 uppercase">
                             <Lock className="w-3 h-3" /> Locked
                           </div>
                         ) : (
-                          <div className="flex items-center gap-1.5 px-2 py-1 bg-afl-navy/10 dark:bg-afl-navy/30 rounded text-[10px] font-bold text-afl-navy dark:text-afl-gold uppercase">
+                          <div className="flex items-center gap-1.5 px-2 py-1 bg-afl-gold/20 rounded text-[10px] font-bold text-afl-gold uppercase">
                             <Unlock className="w-3 h-3" /> Open
                           </div>
                         )}
@@ -2003,7 +2618,7 @@ Good luck in Round ${round + 1}! 🍀`;
                       </div>
                     </div>
 
-                    <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8 items-center relative z-10">
+                    <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-center relative z-10">
                       {/* Home Team */}
                       <motion.button 
                         whileHover={{ scale: 1.02 }}
@@ -2011,7 +2626,7 @@ Good luck in Round ${round + 1}! 🍀`;
                         disabled={savingTipId === game.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          saveTip(game.id, game.round, game.hometeam, gameTip?.margin);
+                          stageTip(game.id, game.round, game.hometeam, gameTip?.margin);
                         }}
                         style={{ 
                           borderTopColor: gameTip?.selectedTeam === game.hometeam ? AFL_TEAM_COLORS[game.hometeam] : 'transparent',
@@ -2021,17 +2636,18 @@ Good luck in Round ${round + 1}! 🍀`;
                           borderLeftWidth: '6px'
                         }}
                         className={cn(
-                          "flex flex-col items-center gap-4 p-6 rounded-2xl transition-all border-2 relative overflow-hidden group/team",
+                          "flex flex-col items-center gap-2 p-4 rounded-2xl transition-all border-2 relative overflow-hidden group/team",
                           gameTip?.selectedTeam === game.hometeam 
-                            ? "bg-stone-50 dark:bg-stone-800/80 shadow-inner" 
-                            : "bg-white dark:bg-stone-800/40 border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/60",
+                            ? "bg-white/20 border-white shadow-lg" 
+                            : "bg-white/5 border-white/10 hover:bg-white/10",
                           savingTipId === game.id && "opacity-50"
                         )}
                       >
                         {/* Selected Indicator Background */}
                         {gameTip?.selectedTeam === game.hometeam && (
-                          <div 
-                            className="absolute inset-0 opacity-5 pointer-events-none"
+                          <motion.div 
+                            layoutId={`selected-bg-${game.id}`}
+                            className="absolute inset-0 opacity-10 pointer-events-none"
                             style={{ backgroundColor: AFL_TEAM_COLORS[game.hometeam] }}
                           />
                         )}
@@ -2041,14 +2657,25 @@ Good luck in Round ${round + 1}! 🍀`;
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-afl-accent"></div>
                           </div>
                         )}
-                        <span 
-                          className="text-xl font-serif italic font-black tracking-tight group-hover/team:scale-110 transition-transform"
-                          style={{ color: AFL_TEAM_COLORS[game.hometeam] }}
-                        >
-                          {game.hometeam}
-                        </span>
+                        <div className="flex items-center gap-3 relative z-10">
+                          <span 
+                            className="text-sm font-bold tracking-tight group-hover/team:scale-110 transition-transform text-black dark:text-white"
+                            style={{ fontFamily: 'Arial, sans-serif' }}
+                          >
+                            {game.hometeam}
+                          </span>
+                          {gameTip?.selectedTeam === game.hometeam && (
+                            <motion.div
+                              initial={{ scale: 0, opacity: 0 }}
+                              animate={{ scale: 1, opacity: 1 }}
+                              className="bg-emerald-500 rounded-full p-1 shadow-lg"
+                            >
+                              <CheckCircle2 className="w-5 h-5 text-white" />
+                            </motion.div>
+                          )}
+                        </div>
                         {hasStarted && (
-                          <div className="flex flex-col items-center gap-1">
+                          <div className="flex flex-col items-center gap-1 relative z-10">
                             <span className={cn(
                               "text-4xl font-mono font-black",
                               isOngoing ? "animate-pulse" : "text-stone-400 dark:text-stone-500"
@@ -2059,8 +2686,6 @@ Good luck in Round ${round + 1}! 🍀`;
                             </span>
                             {isFinished && game.winner === game.hometeam && (
                               <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 animate-in zoom-in duration-500">
-                                <CheckCircle2 className="w-4 h-4" />
-                                <Trophy className="w-4 h-4" />
                               </div>
                             )}
                           </div>
@@ -2068,66 +2693,91 @@ Good luck in Round ${round + 1}! 🍀`;
                       </motion.button>
 
                       {/* VS / Margin */}
-                      <div className="flex flex-col items-center gap-6" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
                         <div className="relative flex items-center justify-center">
                           <div className="absolute w-12 h-12 bg-stone-100 dark:bg-stone-800 rounded-full scale-150 opacity-20" />
                           <span className="text-sm font-black text-stone-300 dark:text-stone-700 uppercase tracking-[0.5em] relative z-10">VS</span>
                         </div>
                         
                         {game.isFirstInRound && (
-                          <div className="w-full max-w-[220px] p-5 rounded-3xl bg-afl-gold/5 border border-afl-gold/20 relative group/margin shadow-sm">
-                            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-afl-gold text-white text-[9px] font-black uppercase rounded-full shadow-lg tracking-widest">
-                              Bonus Point
-                            </div>
-                            <label className="block text-[10px] text-center uppercase font-black text-stone-400 mb-3 tracking-widest">Winning Margin</label>
-                            <div className="flex items-center gap-3">
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const current = gameTip?.margin || 0;
-                                  saveTip(game.id, game.round, gameTip?.selectedTeam || '', Math.max(0, current - 10));
-                                }}
-                                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
-                                title="Decrease by 10"
+                          <AnimatePresence mode="wait">
+                            {gameTip || isFinished ? (
+                              <motion.div 
+                                key="margin-input"
+                                initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                                className="w-full max-w-[180px] p-3 rounded-3xl bg-afl-gold/5 border border-afl-gold/20 relative group/margin shadow-sm"
                               >
-                                -10
-                              </button>
-                              <div className="relative flex-1">
-                                <input 
-                                  type="number"
-                                  placeholder="0"
-                                  value={gameTip?.margin || ''}
-                                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                    const valStr = e.target.value;
-                                    const val = parseInt(valStr);
-                                    saveTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : (val as number));
-                                  }}
-                                  className="w-full text-center py-2 border-b-2 border-afl-gold/30 focus:border-afl-gold outline-none font-mono text-4xl font-black bg-transparent dark:text-stone-100 transition-all disabled:opacity-50"
-                                />
-                              </div>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const current = gameTip?.margin || 0;
-                                  saveTip(game.id, game.round, gameTip?.selectedTeam || '', current + 10);
-                                }}
-                                className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
-                                title="Increase by 10"
+                                <label className="block text-[10px] text-center uppercase font-black text-stone-400 mb-2 tracking-widest">
+                                  {isFinished ? 'Actual Margin' : 'Winning Margin'}
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  {!isFinished && (
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const current = gameTip?.margin || 0;
+                                        stageTip(game.id, game.round, gameTip?.selectedTeam || '', Math.max(0, current - 10));
+                                      }}
+                                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
+                                      title="Decrease by 10"
+                                    >
+                                      -10
+                                    </button>
+                                  )}
+                                  <div className="relative flex-1">
+                                    <input 
+                                      type="number"
+                                      placeholder="0"
+                                      value={isFinished ? Math.abs((game.hscore || 0) - (game.ascore || 0)) : (gameTip?.margin || '')}
+                                      readOnly={isFinished}
+                                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                        if (isFinished) return;
+                                        const valStr = e.target.value;
+                                        const val = parseInt(valStr);
+                                        stageTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : (val as number));
+                                      }}
+                                      className="w-full text-center py-1 border-b-2 border-afl-gold/30 focus:border-afl-gold outline-none font-mono text-3xl font-black bg-transparent dark:text-stone-100 transition-all disabled:opacity-50"
+                                    />
+                                  </div>
+                                  {!isFinished && (
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const current = gameTip?.margin || 0;
+                                        stageTip(game.id, game.round, gameTip?.selectedTeam || '', current + 10);
+                                      }}
+                                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
+                                      title="Increase by 10"
+                                    >
+                                      +10
+                                    </button>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-center text-afl-gold mt-2 font-bold italic leading-tight opacity-80">
+                                  {isFinished ? 'Final Result' : 'Predict the exact margin!'}
+                                </p>
+                              </motion.div>
+                            ) : (
+                              <motion.div 
+                                key="margin-placeholder"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                className="w-full max-w-[180px] p-3 rounded-2xl border-2 border-dashed border-stone-100 dark:border-stone-800 flex flex-col items-center justify-center gap-2 opacity-40"
                               >
-                                +10
-                              </button>
-                            </div>
-                            <p className="text-[10px] text-center text-afl-gold mt-4 font-bold italic leading-tight opacity-80">
-                              Predict the exact margin!
-                            </p>
-                          </div>
+                                <div className="w-8 h-8 rounded-full bg-stone-100 dark:bg-stone-800 flex items-center justify-center">
+                                  <Trophy className="w-4 h-4 text-stone-400" />
+                                </div>
+                                <span className="text-[9px] font-black uppercase text-stone-400 tracking-widest text-center">
+                                  Select a team to enter margin
+                                </span>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         )}
 
-                        {isFinished && game.winner && (
-                          <div className="flex items-center gap-2 px-4 py-1.5 bg-stone-900 dark:bg-stone-100 dark:text-stone-900 text-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg">
-                            Winner: {game.winner}
-                          </div>
-                        )}
+                        {/* Winner Badge Removed */}
                       </div>
 
                       {/* Away Team */}
@@ -2137,7 +2787,7 @@ Good luck in Round ${round + 1}! 🍀`;
                         disabled={savingTipId === game.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          saveTip(game.id, game.round, game.awayteam, gameTip?.margin);
+                          stageTip(game.id, game.round, game.awayteam, gameTip?.margin);
                         }}
                         style={{ 
                           borderTopColor: gameTip?.selectedTeam === game.awayteam ? AFL_TEAM_COLORS[game.awayteam] : 'transparent',
@@ -2147,17 +2797,18 @@ Good luck in Round ${round + 1}! 🍀`;
                           borderRightWidth: '6px'
                         }}
                         className={cn(
-                          "flex flex-col items-center gap-4 p-6 rounded-2xl transition-all border-2 relative overflow-hidden group/team",
+                          "flex flex-col items-center gap-2 p-4 rounded-2xl transition-all border-2 relative overflow-hidden group/team",
                           gameTip?.selectedTeam === game.awayteam 
-                            ? "bg-stone-50 dark:bg-stone-800/80 shadow-inner" 
-                            : "bg-white dark:bg-stone-800/40 border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/60",
+                            ? "bg-white/20 border-white shadow-lg" 
+                            : "bg-white/5 border-white/10 hover:bg-white/10",
                           savingTipId === game.id && "opacity-50"
                         )}
                       >
                         {/* Selected Indicator Background */}
                         {gameTip?.selectedTeam === game.awayteam && (
-                          <div 
-                            className="absolute inset-0 opacity-5 pointer-events-none"
+                          <motion.div 
+                            layoutId={`selected-bg-${game.id}`}
+                            className="absolute inset-0 opacity-10 pointer-events-none"
                             style={{ backgroundColor: AFL_TEAM_COLORS[game.awayteam] }}
                           />
                         )}
@@ -2167,14 +2818,25 @@ Good luck in Round ${round + 1}! 🍀`;
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-afl-accent"></div>
                           </div>
                         )}
-                        <span 
-                          className="text-xl font-serif italic font-black tracking-tight group-hover/team:scale-110 transition-transform"
-                          style={{ color: AFL_TEAM_COLORS[game.awayteam] }}
-                        >
-                          {game.awayteam}
-                        </span>
+                        <div className="flex items-center gap-3 relative z-10">
+                          <span 
+                            className="text-sm font-bold tracking-tight group-hover/team:scale-110 transition-transform text-black dark:text-white"
+                            style={{ fontFamily: 'Arial, sans-serif' }}
+                          >
+                            {game.awayteam}
+                          </span>
+                          {gameTip?.selectedTeam === game.awayteam && (
+                            <motion.div
+                              initial={{ scale: 0, opacity: 0 }}
+                              animate={{ scale: 1, opacity: 1 }}
+                              className="bg-emerald-500 rounded-full p-1 shadow-lg"
+                            >
+                              <CheckCircle2 className="w-5 h-5 text-white" />
+                            </motion.div>
+                          )}
+                        </div>
                         {hasStarted && (
-                          <div className="flex flex-col items-center gap-1">
+                          <div className="flex flex-col items-center gap-1 relative z-10">
                             <span className={cn(
                               "text-4xl font-mono font-black",
                               isOngoing ? "animate-pulse" : "text-stone-400 dark:text-stone-500"
@@ -2185,8 +2847,6 @@ Good luck in Round ${round + 1}! 🍀`;
                             </span>
                             {isFinished && game.winner === game.awayteam && (
                               <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 animate-in zoom-in duration-500">
-                                <CheckCircle2 className="w-4 h-4" />
-                                <Trophy className="w-4 h-4" />
                               </div>
                             )}
                           </div>
@@ -2289,7 +2949,7 @@ Good luck in Round ${round + 1}! 🍀`;
             
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
-                <thead>
+                <thead className="sticky top-0 z-20 bg-white dark:bg-stone-900 shadow-sm">
                   <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
                     <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'rank')}>
                       <div className="flex items-center gap-1">
@@ -2421,7 +3081,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                             return (
                                               <div key={tip.gameId} className="p-3 bg-white dark:bg-stone-800 rounded-xl border border-stone-100 dark:border-stone-700 shadow-sm">
                                                 <div className="flex justify-between items-start mb-2">
-                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-tighter">
+                                                  <p className="text-[10px] font-bold text-black dark:text-white uppercase tracking-tighter" style={{ fontFamily: 'Arial, sans-serif' }}>
                                                     {game.hometeam} v {game.awayteam}
                                                   </p>
                                                   {game.isFinished && (
@@ -2440,8 +3100,8 @@ Good luck in Round ${round + 1}! 🍀`;
                                                     "text-sm font-bold",
                                                     game.isFinished 
                                                       ? (isCorrect ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")
-                                                      : "text-stone-900 dark:text-stone-100"
-                                                  )}>
+                                                      : "text-black dark:text-white"
+                                                  )} style={{ fontFamily: 'Arial, sans-serif' }}>
                                                     {tip.selectedTeam}
                                                   </p>
                                                   {game.isFirstInRound && tip.margin !== undefined && (
@@ -2488,7 +3148,7 @@ Good luck in Round ${round + 1}! 🍀`;
             
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
-                <thead>
+                <thead className="sticky top-0 z-20 bg-white dark:bg-stone-900 shadow-sm">
                   <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
                     <th className="px-8 py-4 font-medium">Pos</th>
                     <th className="px-8 py-4 font-medium">Team</th>
@@ -2508,11 +3168,7 @@ Good luck in Round ${round + 1}! 🍀`;
                       </td>
                       <td className="px-8 py-6">
                         <div className="flex items-center gap-3">
-                          <div 
-                            className="w-2 h-6 rounded-full"
-                            style={{ backgroundColor: AFL_TEAM_COLORS[s.name] || '#ccc' }}
-                          />
-                          <span className="font-bold text-stone-900 dark:text-stone-100">{s.name}</span>
+                          <span className="font-bold text-black dark:text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{s.name}</span>
                         </div>
                       </td>
                       <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.played}</td>
@@ -2531,120 +3187,112 @@ Good luck in Round ${round + 1}! 🍀`;
 
         {activeTab === 'results' && (
           <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl overflow-hidden transition-colors">
-            <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-3xl font-serif italic dark:text-stone-100">Results Analysis</h2>
-                <p className="text-xs text-stone-400 uppercase tracking-widest font-mono mt-1">Season Performance Breakdown</p>
+            <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-gradient-to-br from-afl-navy to-stone-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none">
+                <BarChart3 className="w-48 h-48 text-white" />
+              </div>
+              <div className="relative z-10">
+                <h2 className="text-4xl font-serif italic text-white">Results Analysis</h2>
+                <p className="text-afl-gold/60 text-xs uppercase tracking-[0.3em] font-mono mt-1">Season Performance Breakdown</p>
               </div>
               
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex bg-stone-100 dark:bg-stone-800 p-1 rounded-xl border border-stone-200 dark:border-stone-700">
-                  <button 
-                    onClick={() => setResultsSubTab('individual')}
-                    className={cn(
-                      "px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg transition-all",
-                      resultsSubTab === 'individual' 
-                        ? "bg-white dark:bg-stone-700 text-afl-accent shadow-sm" 
-                        : "text-stone-400 hover:text-stone-600 dark:hover:text-stone-200"
-                    )}
-                  >
-                    Individual
-                  </button>
-                  <button 
-                    onClick={() => setResultsSubTab('round-summary')}
-                    className={cn(
-                      "px-4 py-2 text-xs font-bold uppercase tracking-widest rounded-lg transition-all",
-                      resultsSubTab === 'round-summary' 
-                        ? "bg-white dark:bg-stone-700 text-afl-accent shadow-sm" 
-                        : "text-stone-400 hover:text-stone-600 dark:hover:text-stone-200"
-                    )}
-                  >
-                    Round Summary All Players
-                  </button>
-                </div>
+              <div className="flex flex-col gap-4 relative z-10">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex bg-white/5 backdrop-blur-md p-1 rounded-xl border border-white/10">
+                    <button 
+                      onClick={() => setResultsSubTab('individual')}
+                      className={cn(
+                        "px-6 py-2.5 text-xs font-bold uppercase tracking-widest rounded-lg transition-all",
+                        resultsSubTab === 'individual' 
+                          ? "text-white shadow-lg" 
+                          : "text-white/40 hover:text-white/60"
+                      )}
+                      style={resultsSubTab === 'individual' ? { backgroundColor: accentColor } : {}}
+                    >
+                      Individual
+                    </button>
+                    <button 
+                      onClick={() => setResultsSubTab('round-summary')}
+                      className={cn(
+                        "px-6 py-2.5 text-xs font-bold uppercase tracking-widest rounded-lg transition-all",
+                        resultsSubTab === 'round-summary' 
+                          ? "text-white shadow-lg" 
+                          : "text-white/40 hover:text-white/60"
+                      )}
+                      style={resultsSubTab === 'round-summary' ? { backgroundColor: accentColor } : {}}
+                    >
+                      Round Summary
+                    </button>
+                  </div>
 
-                {resultsSubTab === 'individual' ? (
-                  <div className="flex items-center gap-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl px-3 py-2 shadow-sm">
-                    <User className="w-4 h-4 text-stone-400" />
+                  <div className="flex items-center gap-2 bg-white/5 backdrop-blur-md border border-white/10 rounded-xl px-4 py-2.5 shadow-sm">
+                    <User className="w-4 h-4 text-afl-gold" />
                     <select 
                       value={resultsUserId}
                       onChange={(e) => setResultsUserId(e.target.value)}
-                      className="bg-transparent text-sm font-bold outline-none cursor-pointer text-stone-900 dark:text-stone-100"
+                      className="bg-transparent text-sm font-bold outline-none cursor-pointer text-white"
                     >
+                      {resultsSubTab === 'round-summary' && (
+                        <option value="" className="bg-stone-900 text-white">Highlight Player...</option>
+                      )}
                       {allUsers.map(u => (
-                        <option key={u.uid} value={u.uid} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">
-                          {u.displayName} {u.uid === user?.uid ? '(You)' : ''}
+                        <option key={u.uid} value={u.uid} className="bg-stone-900 text-white">
+                          {u.displayName} {u.uid === user?.uid && resultsSubTab === 'individual' ? '(You)' : ''}
                         </option>
                       ))}
                     </select>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl px-3 py-2 shadow-sm">
-                      <Calendar className="w-4 h-4 text-stone-400" />
-                      <select 
-                        value={resultsSelectedRound}
-                        onChange={(e) => setResultsSelectedRound(Number(e.target.value))}
-                        className="bg-transparent text-sm font-bold outline-none cursor-pointer text-stone-900 dark:text-stone-100"
+                    {resultsSubTab === 'round-summary' && resultsUserId && (
+                      <button 
+                        onClick={() => {
+                          setSelectedProfileUserId(resultsUserId);
+                          setProfileSourceTab('results');
+                          setActiveTab('player-profile');
+                        }}
+                        className="ml-2 p-1 text-afl-gold hover:text-white transition-colors"
+                        title="View Full Profile"
                       >
-                        {rounds.map(r => (
-                          <option key={r} value={r} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">
-                            {getRoundLabel(r as number)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl px-3 py-2 shadow-sm">
-                      <User className="w-4 h-4 text-stone-400" />
-                      <select 
-                        value={resultsUserId}
-                        onChange={(e) => setResultsUserId(e.target.value)}
-                        className="bg-transparent text-sm font-bold outline-none cursor-pointer text-stone-900 dark:text-stone-100"
-                      >
-                        <option value="" className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">Highlight Player...</option>
-                        {allUsers.map(u => (
-                          <option key={u.uid} value={u.uid} className="bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100">
-                            {u.displayName}
-                          </option>
-                        ))}
-                      </select>
-                      {resultsUserId && (
-                        <button 
-                          onClick={() => {
-                            setSelectedProfileUserId(resultsUserId);
-                            setProfileSourceTab('results');
-                            setActiveTab('player-profile');
-                          }}
-                          className="ml-2 p-1 text-afl-navy hover:text-afl-accent transition-colors"
-                          title="View Full Profile"
-                        >
-                          <User className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                        <User className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
-                )}
 
-                <button 
-                  onClick={exportToCSV}
-                  disabled={resultsSubTab === 'individual' ? userResults.length === 0 : roundSummaryData.length === 0}
-                  className="flex items-center gap-2 px-6 py-3 bg-afl-navy text-white rounded-2xl text-sm font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20 dark:shadow-none disabled:opacity-50 disabled:shadow-none"
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  Export to CSV
-                </button>
+                  {resultsSubTab === 'round-summary' && (
+                    <button 
+                      onClick={() => {
+                        setRecapRound(resultsSelectedRound);
+                        setIsRoundRecapOpen(true);
+                      }}
+                      className="flex items-center gap-2 px-6 py-3 bg-afl-accent text-white rounded-2xl text-sm font-bold hover:bg-afl-accent/90 transition-all shadow-lg shadow-afl-accent/20"
+                    >
+                      <Zap className="w-4 h-4" />
+                      Round Recap
+                    </button>
+                  )}
+                </div>
 
                 {resultsSubTab === 'round-summary' && (
-                  <button 
-                    onClick={() => {
-                      setRecapRound(resultsSelectedRound);
-                      setIsRoundRecapOpen(true);
-                    }}
-                    className="flex items-center gap-2 px-6 py-3 bg-afl-accent text-white rounded-2xl text-sm font-bold hover:bg-afl-accent/90 transition-all shadow-lg shadow-afl-accent/20 dark:shadow-none"
-                  >
-                    <Zap className="w-4 h-4" />
-                    Round Recap
-                  </button>
+                  <div className="relative">
+                    <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-hide mask-fade-right">
+                      {rounds.map((r) => (
+                        <button
+                          key={r}
+                          onClick={() => setResultsSelectedRound(r)}
+                          className={cn(
+                            "flex-shrink-0 px-6 py-2.5 rounded-xl text-xs font-bold transition-all border",
+                            resultsSelectedRound === r
+                              ? "text-white border-transparent shadow-lg"
+                              : "bg-white/5 text-white/40 border-white/10 hover:border-white/20"
+                          )}
+                          style={resultsSelectedRound === r ? { 
+                            backgroundColor: accentColor,
+                            boxShadow: `0 4px 12px ${accentColor}40`
+                          } : {}}
+                        >
+                          {getRoundLabel(r)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
@@ -2693,28 +3341,58 @@ Good luck in Round ${round + 1}! 🍀`;
                           <React.Fragment key={r.round}>
                             <tr 
                               onClick={() => setExpandedResultsRound(isExpanded ? null : r.round)}
-                              className="border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 dark:hover:bg-stone-800/50 transition-colors cursor-pointer group"
+                              className={cn(
+                                "border-b border-stone-50 dark:border-stone-800 transition-all cursor-pointer group relative",
+                                isExpanded ? "bg-stone-50 dark:bg-stone-800/50" : "hover:bg-stone-50/80 dark:hover:bg-stone-800/30"
+                              )}
                             >
-                              <td className="px-8 py-6">
+                              <td className="px-8 py-6 relative">
+                                {isExpanded && (
+                                  <div 
+                                    className="absolute left-0 top-0 bottom-0 w-1"
+                                    style={{ backgroundColor: accentColor }}
+                                  />
+                                )}
                                 <div className="flex items-center gap-3">
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-5 h-5 text-stone-300 group-hover:text-afl-accent transition-colors" />
-                                  ) : (
-                                    <ChevronDown className="w-5 h-5 text-stone-300 group-hover:text-afl-accent transition-colors" />
-                                  )}
+                                  <div 
+                                    className={cn(
+                                      "p-2 rounded-lg transition-colors",
+                                      isExpanded ? "bg-white dark:bg-stone-700 shadow-sm" : "bg-stone-100 dark:bg-stone-800 group-hover:bg-white dark:group-hover:bg-stone-700"
+                                    )}
+                                  >
+                                    {isExpanded ? (
+                                      <ChevronUp className="w-4 h-4 text-afl-accent" />
+                                    ) : (
+                                      <ChevronDown className="w-4 h-4 text-stone-400 group-hover:text-afl-accent" />
+                                    )}
+                                  </div>
                                   <div>
                                     <p className="font-bold text-stone-900 dark:text-stone-100">{getRoundLabel(r.round)}</p>
-                                    <p className="text-[10px] text-stone-400 uppercase tracking-tighter">
-                                      {r.finishedGames === r.totalGames ? 'Completed' : r.finishedGames > 0 ? 'In Progress' : 'Upcoming'}
-                                    </p>
+                                    <div className="flex items-center gap-2">
+                                      <div className={cn(
+                                        "w-1.5 h-1.5 rounded-full",
+                                        r.finishedGames === r.totalGames ? "bg-emerald-500" : r.finishedGames > 0 ? "bg-afl-gold animate-pulse" : "bg-stone-300"
+                                      )} />
+                                      <p className="text-[10px] text-stone-400 uppercase tracking-tighter">
+                                        {r.finishedGames === r.totalGames ? 'Completed' : r.finishedGames > 0 ? 'In Progress' : 'Upcoming'}
+                                      </p>
+                                    </div>
                                   </div>
                                 </div>
                               </td>
                               <td className="px-8 py-6 text-center">
-                                <span className="text-lg font-bold text-stone-900 dark:text-stone-100">{r.correct} / {r.totalGames}</span>
+                                <div className="inline-flex flex-col items-center">
+                                  <span className="text-lg font-bold text-stone-900 dark:text-stone-100">{r.correct} / {r.totalGames}</span>
+                                  <div className="w-12 h-1 bg-stone-100 dark:bg-stone-800 rounded-full mt-1 overflow-hidden">
+                                    <div 
+                                      className="h-full bg-emerald-500 transition-all duration-1000"
+                                      style={{ width: `${(r.correct / r.totalGames) * 100}%` }}
+                                    />
+                                  </div>
+                                </div>
                               </td>
-                              <td className="px-8 py-6 text-center">
-                                <span className="text-2xl font-serif font-bold text-afl-accent">{r.points}</span>
+                              <td className="px-8 py-6 text-center bg-stone-50/30 dark:bg-stone-900/30">
+                                <span className="text-3xl font-serif font-bold text-afl-accent drop-shadow-sm">{r.points}</span>
                               </td>
                               <td className="px-8 py-6 text-center">
                                 <span className="text-lg font-mono text-stone-500 dark:text-stone-400">{r.marginError}</span>
@@ -2733,9 +3411,9 @@ Good luck in Round ${round + 1}! 🍀`;
                                           const isInProgress = !game.isFinished && new Date(game.date) <= new Date();
                                           
                                           return (
-                                            <div key={game.id} className="bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-2xl p-4 shadow-sm">
+                                            <div key={game.id} className="bg-afl-navy text-white border border-white rounded-2xl p-4 shadow-sm">
                                               <div className="flex items-center justify-between mb-3">
-                                                <span className="text-[10px] uppercase tracking-widest text-stone-400 font-mono">
+                                                <span className="text-[10px] uppercase tracking-widest text-stone-300 font-mono">
                                                   {game.venue} • {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE h:mm a')}
                                                 </span>
                                                 {game.isFinished ? (
@@ -2764,35 +3442,35 @@ Good luck in Round ${round + 1}! 🍀`;
                                               
                                               <div className="flex items-center justify-between gap-4">
                                                 <div className="flex-1 space-y-2">
-                                                  <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.hteam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
+                                                  <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.hometeam ? 'bg-white/20 border border-white' : ''}`}>
                                                     <div className="flex items-center gap-2">
-                                                      <span className={`text-sm font-bold ${game.winner === game.hteam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
-                                                        {game.hteam}
+                                                      <span className={`text-xs font-bold ${game.winner === game.hometeam ? 'text-white underline decoration-afl-gold underline-offset-4' : 'text-stone-300'}`} style={{ fontFamily: 'Arial, sans-serif' }}>
+                                                        {game.hometeam}
                                                       </span>
                                                     </div>
-                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold">{game.hscore}</span>}
+                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold text-white">{game.hscore}</span>}
                                                   </div>
-                                                  <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.ateam ? 'bg-stone-50 dark:bg-stone-700/50 border border-stone-100 dark:border-stone-600' : ''}`}>
+                                                  <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.awayteam ? 'bg-white/20 border border-white' : ''}`}>
                                                     <div className="flex items-center gap-2">
-                                                      <span className={`text-sm font-bold ${game.winner === game.ateam ? 'text-stone-900 dark:text-stone-100 underline decoration-afl-accent underline-offset-4' : 'text-stone-500 dark:text-stone-400'}`}>
-                                                        {game.ateam}
+                                                      <span className={`text-xs font-bold ${game.winner === game.awayteam ? 'text-white underline decoration-afl-gold underline-offset-4' : 'text-stone-300'}`} style={{ fontFamily: 'Arial, sans-serif' }}>
+                                                        {game.awayteam}
                                                       </span>
                                                     </div>
-                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold">{game.ascore}</span>}
+                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold text-white">{game.ascore}</span>}
                                                   </div>
                                                 </div>
                                                 
-                                                <div className="text-right border-l border-stone-100 dark:border-stone-700 pl-4 min-w-[80px]">
+                                                <div className="text-right border-l border-white/10 pl-4 min-w-[80px]">
                                                   <p className="text-[10px] uppercase tracking-widest text-stone-400 font-mono mb-1">Tip</p>
-                                                  <p className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate max-w-[100px]">
+                                                  <p className="text-xs font-bold text-white truncate max-w-[100px]" style={{ fontFamily: 'Arial, sans-serif' }}>
                                                     {tip?.selectedTeam || '—'}
                                                   </p>
                                                   {game.isFirstInRound && tip?.margin !== undefined && (
-                                                    <div className="mt-2 pt-2 border-t border-stone-50 dark:border-stone-700">
+                                                    <div className="mt-2 pt-2 border-t border-white/10">
                                                       <p className="text-[10px] uppercase tracking-widest text-stone-400 font-mono mb-1">Margin</p>
                                                       <div className="flex flex-col">
-                                                        <span className="text-xs font-bold text-stone-900 dark:text-stone-100">Tip: {tip.margin}</span>
-                                                        {game.isFinished && <span className="text-[10px] text-stone-500 dark:text-stone-400">Actual: {actualMargin}</span>}
+                                                        <span className="text-xs font-bold text-white" style={{ fontFamily: 'Arial, sans-serif' }}>Tip: {tip.margin}</span>
+                                                        {game.isFinished && <span className="text-[10px] text-stone-300">Actual: {actualMargin}</span>}
                                                       </div>
                                                     </div>
                                                   )}
@@ -2861,27 +3539,46 @@ Good luck in Round ${round + 1}! 🍀`;
                         <tr 
                           key={u.uid}
                           className={cn(
-                            "border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 dark:hover:bg-stone-800/50 transition-colors",
-                            u.uid === resultsUserId && "bg-afl-navy/10 dark:bg-afl-navy/20"
+                            "border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 dark:hover:bg-stone-800/50 transition-all group relative",
+                            u.uid === resultsUserId && "bg-afl-navy/5 dark:bg-afl-navy/10"
                           )}
                         >
-                          <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700">
+                          <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700 relative">
+                            {u.uid === resultsUserId && (
+                              <div 
+                                className="absolute left-0 top-0 bottom-0 w-1"
+                                style={{ backgroundColor: accentColor }}
+                              />
+                            )}
                             {u.rank < 10 ? `0${u.rank}` : u.rank}
                           </td>
                           <td className="px-8 py-6">
                             <div className="flex items-center gap-3">
                               <div 
-                                className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold transition-all relative overflow-hidden"
+                                className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold transition-all relative overflow-hidden shadow-lg"
                                 style={{ 
                                   backgroundColor: u.favoriteTeam ? AFL_TEAM_COLORS[u.favoriteTeam] : '#141414',
-                                  boxShadow: u.favoriteTeam ? `0 0 10px ${AFL_TEAM_COLORS[u.favoriteTeam]}40` : 'none'
+                                  boxShadow: u.favoriteTeam ? `0 4px 12px ${AFL_TEAM_COLORS[u.favoriteTeam]}40` : 'none'
                                 }}
                               >
-                                {u.displayName.charAt(0).toUpperCase()}
+                                {u.favoriteTeam && (
+                                  <div className="absolute inset-0 bg-white opacity-10" />
+                                )}
+                                <span className="relative z-10">{u.displayName.charAt(0).toUpperCase()}</span>
                                 <div className="absolute inset-0 bg-black/10 z-0" />
                               </div>
                               <div>
-                                <p className="font-bold text-stone-900 dark:text-stone-100">{u.displayName}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-bold text-stone-900 dark:text-stone-100">{u.displayName}</p>
+                                  {u.favoriteTeam && (
+                                    <span 
+                                      className="text-[8px] px-1.5 py-0.5 rounded text-white font-bold uppercase"
+                                      style={{ backgroundColor: AFL_TEAM_COLORS[u.favoriteTeam] }}
+                                    >
+                                      {u.favoriteTeam}
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-[10px] text-stone-400 uppercase tracking-tighter">{u.email}</p>
                               </div>
                             </div>
@@ -2889,8 +3586,8 @@ Good luck in Round ${round + 1}! 🍀`;
                           <td className="px-8 py-6 text-center">
                             <span className="text-lg font-bold text-stone-900 dark:text-stone-100">{u.correct}</span>
                           </td>
-                          <td className="px-8 py-6 text-center">
-                            <span className="text-2xl font-serif font-bold text-afl-accent">{u.points}</span>
+                          <td className="px-8 py-6 text-center bg-stone-50/30 dark:bg-stone-900/30">
+                            <span className="text-3xl font-serif font-bold text-afl-accent drop-shadow-sm">{u.points}</span>
                           </td>
                           <td className="px-8 py-6 text-center">
                             <span className="text-lg font-mono text-stone-500 dark:text-stone-400">{u.marginError}</span>
@@ -2975,34 +3672,97 @@ Good luck in Round ${round + 1}! 🍀`;
                         className="w-32 h-32 rounded-full flex items-center justify-center text-4xl text-white font-bold shadow-2xl relative overflow-hidden"
                         style={{ backgroundColor: profileUser.favoriteTeam ? AFL_TEAM_COLORS[profileUser.favoriteTeam] : '#141414' }}
                       >
-                        {profileUser.displayName.charAt(0).toUpperCase()}
+                        {profileUser.favoriteTeam && (
+                        <div className="absolute inset-0 bg-stone-100 dark:bg-stone-800 opacity-10" />
+                        )}
+                        <span className="relative z-10">{profileUser.displayName.charAt(0).toUpperCase()}</span>
                         <div className="absolute inset-0 bg-black/10 z-0" />
                       </div>
                       
                       <div className="text-center md:text-left space-y-2">
-                        <h2 className="text-4xl font-serif italic text-stone-900 dark:text-stone-100">{profileUser.displayName}</h2>
-                        <div className="flex flex-wrap items-center justify-center md:justify-start gap-3">
-                          <span className="text-xs font-mono text-stone-400 uppercase tracking-widest">{profileUser.email}</span>
-                          {profileUser.favoriteTeam && (
-                            <div 
-                              className="flex items-center gap-1.5 px-3 py-1 rounded-full backdrop-blur-sm border"
-                              style={{ 
-                                backgroundColor: `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}20`,
-                                borderColor: `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}40`
-                              }}
-                            >
-                              <span 
-                                className="text-[10px] font-bold uppercase tracking-widest"
-                                style={{ color: AFL_TEAM_COLORS[profileUser.favoriteTeam] }}
+                        {isEditingSelf && profileUser.uid === user?.uid ? (
+                          <div className="space-y-4">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-400 uppercase ml-1">Display Name</label>
+                              <input 
+                                type="text"
+                                value={selfDisplayName}
+                                onChange={(e) => setSelfDisplayName(e.target.value)}
+                                className="w-full p-2.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-sm focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
+                                placeholder="Display Name"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-400 uppercase ml-1">Favorite Team</label>
+                              <select 
+                                value={selfFavoriteTeam}
+                                onChange={(e) => setSelfFavoriteTeam(e.target.value)}
+                                className="w-full p-2.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-sm focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
                               >
-                                {profileUser.favoriteTeam} Fan
+                                <option value="">No Favorite Team</option>
+                                {AFL_TEAMS.map(team => (
+                                  <option key={team} value={team}>{team}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={handleUpdateSelfName}
+                                disabled={isActionLoading}
+                                className="px-6 py-2 bg-afl-navy text-white rounded-xl text-xs font-bold hover:bg-afl-navy/90 transition-colors shadow-lg shadow-afl-navy/20 disabled:opacity-50"
+                              >
+                                {isActionLoading ? "Saving..." : "Save Changes"}
+                              </button>
+                              <button 
+                                onClick={() => setIsEditingSelf(false)}
+                                className="px-6 py-2 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 rounded-xl text-xs font-bold hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center justify-center md:justify-start gap-4">
+                              <h2 className="text-4xl font-serif italic text-stone-900 dark:text-stone-100">{profileUser.displayName}</h2>
+                              {profileUser.uid === user?.uid && (
+                                <button 
+                                  onClick={() => {
+                                    setIsEditingSelf(true);
+                                    setSelfDisplayName(profileUser.displayName);
+                                    setSelfFavoriteTeam(profileUser.favoriteTeam || '');
+                                  }}
+                                  className="p-2 text-stone-300 hover:text-stone-600 dark:hover:text-stone-400 transition-colors"
+                                  title="Edit Profile"
+                                >
+                                  <Settings className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center justify-center md:justify-start gap-3">
+                              <span className="text-xs font-mono text-stone-400 uppercase tracking-widest">{profileUser.email}</span>
+                              {profileUser.favoriteTeam && (
+                                <div 
+                                  className="flex items-center gap-1.5 px-3 py-1 rounded-full backdrop-blur-sm border"
+                                  style={{ 
+                                    backgroundColor: `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}20`,
+                                    borderColor: `${AFL_TEAM_COLORS[profileUser.favoriteTeam]}40`
+                                  }}
+                                >
+                                  <span 
+                                    className="text-[10px] font-bold uppercase tracking-widest"
+                                    style={{ color: AFL_TEAM_COLORS[profileUser.favoriteTeam], fontFamily: 'Arial, sans-serif' }}
+                                  >
+                                    {profileUser.favoriteTeam} Fan
+                                  </span>
+                                </div>
+                              )}
+                              <span className="px-3 py-1 bg-stone-100 dark:bg-stone-800 rounded-full text-[10px] font-bold text-stone-500 uppercase tracking-widest">
+                                {profileUser.role}
                               </span>
                             </div>
-                          )}
-                          <span className="px-3 py-1 bg-stone-100 dark:bg-stone-800 rounded-full text-[10px] font-bold text-stone-500 uppercase tracking-widest">
-                            {profileUser.role}
-                          </span>
-                        </div>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -3049,22 +3809,30 @@ Good luck in Round ${round + 1}! 🍀`;
                           <p className="text-sm text-stone-500 italic font-serif">No recent games completed.</p>
                         ) : (
                           recentTips.map(({ game, tip, isCorrect }) => (
-                            <div key={game.id} className="bg-white dark:bg-stone-900 p-4 rounded-2xl border border-stone-100 dark:border-stone-800 flex items-center justify-between">
+                            <div key={game.id} className="bg-afl-navy text-white p-4 rounded-2xl border border-white flex items-center justify-between">
                               <div className="flex items-center gap-3">
                                 <div className={cn(
                                   "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
-                                  isCorrect ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+                                  isCorrect ? "bg-emerald-500 text-white" : "bg-red-500 text-white"
                                 )}>
                                   {isCorrect ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                                 </div>
                                 <div>
-                                  <p className="text-xs font-bold text-stone-900 dark:text-stone-100">{game.hometeam} v {game.awayteam}</p>
-                                  <p className="text-[10px] text-stone-400 uppercase">Round {game.round}</p>
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-xs font-bold text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{game.hometeam}</span>
+                                    </div>
+                                    <span className="text-[10px] text-stone-400">v</span>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-xs font-bold text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{game.awayteam}</span>
+                                    </div>
+                                  </div>
+                                  <p className="text-[10px] text-stone-300 uppercase">Round {game.round}</p>
                                 </div>
                               </div>
                               <div className="text-right">
                                 <p className="text-[10px] font-mono text-stone-400 uppercase">Tip</p>
-                                <p className="text-xs font-bold text-stone-900 dark:text-stone-100">{tip?.selectedTeam || '—'}</p>
+                                <p className="text-xs font-bold text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{tip?.selectedTeam || '—'}</p>
                               </div>
                             </div>
                           ))
@@ -3104,11 +3872,19 @@ Good luck in Round ${round + 1}! 🍀`;
                                   <tr key={tip.gameId} className="border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 transition-colors">
                                     <td className="px-6 py-4 text-xs font-mono text-stone-400">R{game.round}</td>
                                     <td className="px-6 py-4">
-                                      <p className="text-xs font-bold text-stone-900 dark:text-stone-100">{game.hometeam} v {game.awayteam}</p>
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-xs font-bold text-black dark:text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{game.hometeam}</span>
+                                        </div>
+                                        <span className="text-[10px] text-stone-400">v</span>
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-xs font-bold text-black dark:text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{game.awayteam}</span>
+                                        </div>
+                                      </div>
                                       <p className="text-[10px] text-stone-400 uppercase">{format(parseISO(game.date), 'MMM d')}</p>
                                     </td>
                                     <td className="px-6 py-4 text-center">
-                                      <span className="text-xs font-bold text-stone-900 dark:text-stone-100">{tip.selectedTeam}</span>
+                                      <span className="text-xs font-bold text-black dark:text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{tip.selectedTeam}</span>
                                     </td>
                                     <td className="px-6 py-4 text-center">
                                       {game.isFinished ? (
@@ -3145,9 +3921,17 @@ Good luck in Round ${round + 1}! 🍀`;
         {activeTab === 'admin' && profile?.role === 'admin' && (
           <div className="space-y-8">
             <div className="bg-white dark:bg-stone-900 p-8 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl transition-colors">
-              <div className="flex items-center gap-3 mb-8">
-                <Settings className="w-8 h-8 text-stone-900 dark:text-stone-100" />
-                <h2 className="text-3xl font-serif italic text-stone-900 dark:text-stone-100">Admin Controls</h2>
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-3">
+                  <Settings className="w-8 h-8 text-stone-900 dark:text-stone-100" />
+                  <h2 className="text-3xl font-serif italic text-stone-900 dark:text-stone-100">Admin Controls</h2>
+                </div>
+                <button 
+                  onClick={downloadTipsCSV}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-600/20"
+                >
+                  <Download className="w-4 h-4" /> Export All Tips (CSV)
+                </button>
               </div>
 
               {/* User Management Section */}
@@ -3212,8 +3996,9 @@ Good luck in Round ${round + 1}! 🍀`;
                 <div className="grid gap-3">
                   {[...allUsers].sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')).map(u => (
                     <div key={u.uid} className="flex items-center justify-between p-4 bg-white dark:bg-stone-900 rounded-2xl border border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700 transition-all">
-                      <div className="flex-1">
-                        {editingUserId === u.uid ? (
+                      <div className="flex items-center gap-3 flex-1">
+                        <div className="flex-1">
+                          {editingUserId === u.uid ? (
                           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
                             <input 
                               type="text"
@@ -3228,7 +4013,7 @@ Good luck in Round ${round + 1}! 🍀`;
                               className="p-1.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
                             >
                               <option value="">No Favorite Team</option>
-                              {Object.keys(AFL_TEAM_COLORS).map(team => (
+                              {AFL_TEAMS.map(team => (
                                 <option key={team} value={team}>{team}</option>
                               ))}
                             </select>
@@ -3268,7 +4053,7 @@ Good luck in Round ${round + 1}! 🍀`;
                               <div className="flex items-center gap-1">
                                 <span 
                                   className="text-[8px] px-1.5 py-0.5 rounded text-white font-bold uppercase"
-                                  style={{ backgroundColor: AFL_TEAM_COLORS[u.favoriteTeam] }}
+                                  style={{ backgroundColor: AFL_TEAM_COLORS[u.favoriteTeam], fontFamily: 'Arial, sans-serif' }}
                                 >
                                   {u.favoriteTeam}
                                 </span>
@@ -3289,8 +4074,20 @@ Good luck in Round ${round + 1}! 🍀`;
                         )}
                         <p className="text-[10px] text-stone-400 uppercase font-mono">{u.email}</p>
                       </div>
+                    </div>
 
-                      <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3">
+                        <button 
+                          onClick={() => {
+                            setAdminSelectedUserId(u.uid);
+                            const element = document.getElementById('admin-tip-editor');
+                            if (element) element.scrollIntoView({ behavior: 'smooth' });
+                          }}
+                          className="p-2 text-stone-300 hover:text-afl-accent transition-colors"
+                          title="Edit Player Tips"
+                        >
+                          <Edit3 className="w-5 h-5" />
+                        </button>
                         <button 
                           onClick={() => {
                             setSelectedProfileUserId(u.uid);
@@ -3317,49 +4114,7 @@ Good luck in Round ${round + 1}! 🍀`;
                 </div>
               </div>
 
-              <div className="space-y-6">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">Unlock Rounds for Players</h3>
-                
-                <div className="grid gap-4">
-                  {allUsers.filter(u => u.uid !== user?.uid).map(u => (
-                    <div key={u.uid} className="flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-800 rounded-2xl border border-stone-100 dark:border-stone-700">
-                      <div>
-                        <p className="font-bold text-stone-900 dark:text-stone-100">{u.displayName}</p>
-                        <p className="text-xs text-stone-400">{u.email}</p>
-                      </div>
-                      
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-stone-400 uppercase mr-2">Round {currentRound}:</span>
-                        {u.unlockedRounds?.includes(currentRound) ? (
-                          <button 
-                            onClick={async () => {
-                              await updateDoc(doc(db, 'users', u.uid), {
-                                unlockedRounds: arrayRemove(currentRound)
-                              });
-                            }}
-                            className="flex items-center gap-2 px-4 py-2 bg-stone-900 text-white rounded-xl text-xs font-bold hover:bg-stone-800 transition-colors"
-                          >
-                            <Lock className="w-4 h-4" /> Lock Round
-                          </button>
-                        ) : (
-                          <button 
-                            onClick={async () => {
-                              await updateDoc(doc(db, 'users', u.uid), {
-                                unlockedRounds: arrayUnion(currentRound)
-                              });
-                            }}
-                            className="flex items-center gap-2 px-4 py-2 bg-afl-navy text-white rounded-xl text-xs font-bold hover:bg-afl-navy/90 transition-colors"
-                          >
-                            <Unlock className="w-4 h-4" /> Unlock Round
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-6 pt-8 border-t border-stone-100">
+              <div id="admin-tip-editor" className="space-y-6 pt-8 border-t border-stone-100">
                 <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">Edit Player Tips</h3>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3379,15 +4134,28 @@ Good luck in Round ${round + 1}! 🍀`;
                   
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-stone-400 uppercase">Select Round</label>
-                    <select 
-                      value={adminSelectedRound}
-                      onChange={(e) => setAdminSelectedRound(Number(e.target.value))}
-                      className="w-full p-3 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-sm focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100"
-                    >
-                      {rounds.map(r => (
-                        <option key={r} value={r} className="text-stone-900 dark:text-stone-100 dark:bg-stone-900">Round {r}</option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-hide mask-fade-right">
+                        {rounds.map((r) => (
+                          <button
+                            key={r}
+                            onClick={() => setAdminSelectedRound(r)}
+                            className={cn(
+                              "flex-shrink-0 px-6 py-2.5 rounded-xl text-xs font-bold transition-all border",
+                              adminSelectedRound === r
+                                ? "text-white border-transparent shadow-lg"
+                                : "bg-white dark:bg-stone-900 text-stone-500 border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700"
+                            )}
+                            style={adminSelectedRound === r ? { 
+                              backgroundColor: accentColor,
+                              boxShadow: `0 4px 12px ${accentColor}40`
+                            } : {}}
+                          >
+                            {getRoundLabel(r)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -3397,20 +4165,20 @@ Good luck in Round ${round + 1}! 🍀`;
                       const playerTip = allTips.find(t => t.uid === adminSelectedUserId && t.gameId === game.id);
                       
                       return (
-                        <div key={game.id} className="p-4 bg-stone-50 dark:bg-stone-800 rounded-2xl border border-stone-100 dark:border-stone-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div key={game.id} className="p-4 bg-afl-navy text-white rounded-2xl border border-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex-1">
-                            <p className="text-xs font-bold text-stone-900 dark:text-stone-100">{game.hometeam} vs {game.awayteam}</p>
-                            <p className="text-[10px] text-stone-400 uppercase">{formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE MMM d, h:mm a')} AWST</p>
+                            <p className="text-xs font-bold text-white">{game.hometeam} vs {game.awayteam}</p>
+                            <p className="text-[10px] text-stone-300 uppercase">{formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE MMM d, h:mm a')} AWST</p>
                           </div>
                           
                           <div className="flex flex-wrap items-center gap-3">
-                            <div className="flex bg-white dark:bg-stone-900 rounded-lg border border-stone-200 dark:border-stone-700 overflow-hidden">
+                            <div className="flex bg-white/5 rounded-lg border border-white/10 overflow-hidden">
                               <button 
                                 onClick={() => handleAdminTipUpdate(game.id, game.hometeam, playerTip?.margin)}
                                 disabled={isActionLoading}
                                 className={cn(
-                                  "px-3 py-1.5 text-xs font-bold transition-colors disabled:opacity-50",
-                                  playerTip?.selectedTeam === game.hometeam ? "bg-afl-navy text-white" : "text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800"
+                                  "px-3 py-1.5 text-xs font-bold transition-colors disabled:opacity-50 flex items-center gap-2",
+                                  playerTip?.selectedTeam === game.hometeam ? "bg-white/20 text-white" : "text-stone-300 hover:bg-white/10"
                                 )}
                               >
                                 {game.hometeam}
@@ -3419,8 +4187,8 @@ Good luck in Round ${round + 1}! 🍀`;
                                 onClick={() => handleAdminTipUpdate(game.id, game.awayteam, playerTip?.margin)}
                                 disabled={isActionLoading}
                                 className={cn(
-                                  "px-3 py-1.5 text-xs font-bold transition-colors disabled:opacity-50",
-                                  playerTip?.selectedTeam === game.awayteam ? "bg-afl-navy text-white" : "text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800"
+                                  "px-3 py-1.5 text-xs font-bold transition-colors disabled:opacity-50 flex items-center gap-2",
+                                  playerTip?.selectedTeam === game.awayteam ? "bg-white/20 text-white" : "text-stone-300 hover:bg-white/10"
                                 )}
                               >
                                 {game.awayteam}
@@ -3436,7 +4204,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                     handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, Math.max(0, current - 10));
                                   }}
                                   disabled={isActionLoading}
-                                  className="p-1 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors disabled:opacity-50"
+                                  className="p-1 rounded bg-white/10 text-stone-300 hover:text-afl-accent transition-colors disabled:opacity-50"
                                   title="Decrease by 10"
                                 >
                                   <Minus className="w-3 h-3" />
@@ -3447,7 +4215,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                   value={playerTip?.margin !== undefined ? playerTip.margin : ''}
                                   onChange={(e) => handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, Number(e.target.value))}
                                   placeholder="Pts"
-                                  className="w-16 p-1.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg text-xs font-bold focus:ring-2 focus:ring-afl-accent outline-none text-stone-900 dark:text-stone-100 disabled:opacity-50 text-center"
+                                  className="w-16 p-1.5 bg-transparent border border-white/20 rounded-lg text-xs font-bold focus:ring-2 focus:ring-afl-accent outline-none text-white disabled:opacity-50 text-center"
                                 />
                                 <button 
                                   onClick={() => {
@@ -3455,7 +4223,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                     handleAdminTipUpdate(game.id, playerTip?.selectedTeam || game.hometeam, current + 10);
                                   }}
                                   disabled={isActionLoading}
-                                  className="p-1 rounded bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-afl-accent transition-colors disabled:opacity-50"
+                                  className="p-1 rounded bg-white/10 text-stone-300 hover:text-afl-accent transition-colors disabled:opacity-50"
                                   title="Increase by 10"
                                 >
                                   <Plus className="w-3 h-3" />
@@ -3484,107 +4252,219 @@ Good luck in Round ${round + 1}! 🍀`;
 
               <div className="space-y-6 pt-8 border-t border-stone-100 dark:border-stone-800">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">Player Selections Report</h3>
-                  <button 
-                    onClick={downloadPlayerSelectionsCSV}
-                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/20"
-                  >
-                    <Download className="w-4 h-4" /> Export CSV
-                  </button>
-                </div>
-                
-                <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
-                          <th className="px-6 py-4 font-medium sticky left-0 bg-white dark:bg-stone-900 z-10">Player</th>
-                          {rounds.map(r => (
-                            <th key={r} className="px-6 py-4 font-medium text-center border-l border-stone-100 dark:border-stone-800">
-                              {getRoundLabel(r as number)}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {allUsers.map(u => (
-                          <tr key={u.uid} className="border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 transition-colors">
-                            <td className="px-6 py-4 sticky left-0 bg-white dark:bg-stone-900 z-10 border-r border-stone-100 dark:border-stone-800">
-                              <p className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate max-w-[120px]">{u.displayName}</p>
-                              <p className="text-[8px] text-stone-400 uppercase truncate max-w-[120px]">{u.email}</p>
-                            </td>
-                            {rounds.map(r => {
-                              const roundGames = games.filter(g => g.round === r);
-                              const userTips = allTips.filter(t => t.uid === u.uid);
-                              
-                              const roundTips = userTips.filter(t => roundGames.some(g => g.id === t.gameId));
-                              const correctTips = roundTips.filter(tip => {
-                                const game = games.find(g => g.id === tip.gameId);
-                                return game && game.isFinished && game.winner === tip.selectedTeam;
-                              }).length;
-                              
-                              return (
-                                <td key={r} className="px-4 py-4 text-center border-l border-stone-100 dark:border-stone-800">
-                                  <div className="flex items-center justify-center gap-1">
-                                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                                      {correctTips}
-                                    </span>
-                                    <span className="text-[8px] text-stone-400 uppercase">
-                                      /{roundGames.length}
-                                    </span>
-                                  </div>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div>
+                    <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">Missing Tips Report</h3>
+                    <p className="text-[10px] text-stone-500 mt-1">Players who haven't completed their tips for Round {currentRound}</p>
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-lg text-xs font-bold border border-amber-100 dark:border-amber-900/30">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    {allUsers.filter(u => {
+                      const roundGames = games.filter(g => g.round === currentRound);
+                      const userTips = allTips.filter(t => t.uid === u.uid && roundGames.some(g => g.id === t.gameId));
+                      return userTips.length < roundGames.length;
+                    }).length} Pending
                   </div>
                 </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {allUsers.filter(u => {
+                    const roundGames = games.filter(g => g.round === currentRound);
+                    const userTips = allTips.filter(t => t.uid === u.uid && roundGames.some(g => g.id === t.gameId));
+                    return userTips.length < roundGames.length;
+                  }).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')).map(u => {
+                    const roundGames = games.filter(g => g.round === currentRound);
+                    const userTips = allTips.filter(t => t.uid === u.uid && roundGames.some(g => g.id === t.gameId));
+                    const missingCount = roundGames.length - userTips.length;
+                    
+                    return (
+                      <div key={u.uid} className="p-4 bg-white dark:bg-stone-900 rounded-2xl border border-stone-100 dark:border-stone-800 flex items-center justify-between group hover:border-amber-200 dark:hover:border-amber-900/50 transition-all">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-stone-50 dark:bg-stone-800 flex items-center justify-center text-stone-400 group-hover:bg-amber-50 dark:group-hover:bg-amber-900/20 group-hover:text-amber-500 transition-colors">
+                            <User className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-stone-900 dark:text-stone-100">{u.displayName}</p>
+                            <p className="text-[10px] text-stone-400 uppercase font-mono">{u.email}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-black text-amber-600 dark:text-amber-400">{missingCount}</p>
+                          <p className="text-[8px] text-stone-400 uppercase font-bold">Missing</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {allUsers.filter(u => {
+                    const roundGames = games.filter(g => g.round === currentRound);
+                    const userTips = allTips.filter(t => t.uid === u.uid && roundGames.some(g => g.id === t.gameId));
+                    return userTips.length < roundGames.length;
+                  }).length === 0 && (
+                    <div className="col-span-full py-12 text-center bg-stone-50 dark:bg-stone-800/50 rounded-3xl border border-dashed border-stone-200 dark:border-stone-800">
+                      <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-4 opacity-20" />
+                      <p className="text-sm font-bold text-stone-400 uppercase tracking-widest">All players have tipped!</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-6 pt-8 border-t border-stone-100 dark:border-stone-800">
               </div>
             </div>
 
-            <div className="bg-stone-900 text-white p-8 rounded-3xl shadow-2xl">
-              <h3 className="text-xl font-serif italic mb-4">System Info</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-                <div>
-                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-1">Total Games</p>
-                  <p className="text-2xl font-mono">{games.length}</p>
+            <div className="bg-stone-900 text-white p-8 rounded-3xl shadow-2xl space-y-8">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-serif italic">System Status & Debug</h3>
+                <div className="flex items-center gap-2">
+                  <div className={cn(
+                    "w-2 h-2 rounded-full animate-pulse",
+                    apiStatus.firestore === 'success' ? "bg-emerald-500" : "bg-red-500"
+                  )}></div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">
+                    {apiStatus.firestore === 'success' ? "Cloud Connected" : "Connection Error"}
+                  </span>
                 </div>
-                <div>
-                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-1">Total Tips</p>
-                  <p className="text-2xl font-mono">{allTips.length}</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {/* API Status Cards */}
+                <div className="p-4 bg-stone-800/50 rounded-2xl border border-stone-800">
+                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-3">Squiggle API: Games</p>
+                  <div className="flex items-center justify-between">
+                    <span className={cn(
+                      "text-xs font-bold px-2 py-1 rounded",
+                      apiStatus.games === 'success' ? "bg-emerald-500/10 text-emerald-500" :
+                      apiStatus.games === 'fallback' ? "bg-amber-500/10 text-amber-500" :
+                      apiStatus.games === 'cache' ? "bg-blue-500/10 text-blue-500" :
+                      "bg-red-500/10 text-red-500"
+                    )}>
+                      {apiStatus.games.toUpperCase()}
+                    </span>
+                    <Clock className="w-4 h-4 text-stone-600" />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-1">Total Players</p>
-                  <p className="text-2xl font-mono">{allUsers.length}</p>
+
+                <div className="p-4 bg-stone-800/50 rounded-2xl border border-stone-800">
+                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-3">Squiggle API: Standings</p>
+                  <div className="flex items-center justify-between">
+                    <span className={cn(
+                      "text-xs font-bold px-2 py-1 rounded",
+                      apiStatus.standings === 'success' ? "bg-emerald-500/10 text-emerald-500" :
+                      apiStatus.standings === 'fallback' ? "bg-amber-500/10 text-amber-500" :
+                      apiStatus.standings === 'cache' ? "bg-blue-500/10 text-blue-500" :
+                      "bg-red-500/10 text-red-500"
+                    )}>
+                      {apiStatus.standings.toUpperCase()}
+                    </span>
+                    <BarChart3 className="w-4 h-4 text-stone-600" />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-1">Current Round</p>
-                  <p className="text-2xl font-mono">{currentRound}</p>
+
+                <div className="p-4 bg-stone-800/50 rounded-2xl border border-stone-800">
+                  <p className="text-[10px] text-stone-500 uppercase tracking-widest mb-3">Firestore Sync</p>
+                  <div className="flex items-center justify-between">
+                    <span className={cn(
+                      "text-xs font-bold px-2 py-1 rounded",
+                      apiStatus.firestore === 'success' ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
+                    )}>
+                      {apiStatus.firestore.toUpperCase()}
+                    </span>
+                    <Zap className="w-4 h-4 text-stone-600" />
+                  </div>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4 border-t border-stone-800">
+                {/* Auth & Session Info */}
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Auth Session</h4>
+                  <div className="space-y-2 font-mono text-[11px]">
+                    <div className="flex justify-between py-1 border-b border-stone-800">
+                      <span className="text-stone-500">Project ID</span>
+                      <span className="text-stone-300">{firebaseConfig.projectId}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-stone-800">
+                      <span className="text-stone-500">Auth Domain</span>
+                      <span className="text-stone-300">{firebaseConfig.authDomain}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-stone-800">
+                      <span className="text-stone-500">User ID</span>
+                      <span className="text-stone-300">{user?.uid || 'N/A'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-stone-800">
+                      <span className="text-stone-500">Email</span>
+                      <span className="text-stone-300">{user?.email || 'N/A'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-stone-800">
+                      <span className="text-stone-500">Role</span>
+                      <span className="text-stone-300 uppercase">{profile?.role || 'N/A'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-stone-800">
+                      <span className="text-stone-500">Provider</span>
+                      <span className="text-stone-300">{user?.providerData[0]?.providerId || 'password'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Database Stats */}
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Database Metrics</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-3 bg-stone-800/30 rounded-xl border border-stone-800/50">
+                      <p className="text-[9px] text-stone-500 uppercase mb-1">Total Games</p>
+                      <p className="text-xl font-mono">{games.length}</p>
+                    </div>
+                    <div className="p-3 bg-stone-800/30 rounded-xl border border-stone-800/50">
+                      <p className="text-[9px] text-stone-500 uppercase mb-1">Total Tips</p>
+                      <p className="text-xl font-mono">{allTips.length}</p>
+                    </div>
+                    <div className="p-3 bg-stone-800/30 rounded-xl border border-stone-800/50">
+                      <p className="text-[9px] text-stone-500 uppercase mb-1">Total Players</p>
+                      <p className="text-xl font-mono">{allUsers.length}</p>
+                    </div>
+                    <div className="p-3 bg-stone-800/30 rounded-xl border border-stone-800/50">
+                      <p className="text-[9px] text-stone-500 uppercase mb-1">Current Round</p>
+                      <p className="text-xl font-mono">{currentRound}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 pt-4">
+                <button 
+                  onClick={() => fetchGames(true)}
+                  className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center gap-2"
+                >
+                  <Zap className="w-3 h-3" /> Force Refresh API
+                </button>
+                <button 
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center gap-2"
+                >
+                  <Clock className="w-3 h-3" /> Reload Session
+                </button>
               </div>
             </div>
           </div>
         )}
-      </main>
+          </main>
 
-      {/* Footer */}
-      <footer className="max-w-5xl mx-auto px-4 py-12 border-t border-stone-200 mt-12">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="text-center md:text-left">
-            <p className="text-sm font-serif italic font-bold">Adrian's Tipping Page</p>
-            <p className="text-[10px] text-stone-400 uppercase tracking-widest mt-1">Built for the 2026 AFL Season</p>
-          </div>
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 text-[10px] font-bold text-stone-400 uppercase tracking-widest">
-              <div className="w-2 h-2 rounded-full bg-afl-accent animate-pulse"></div>
-              Live Data from Squiggle API
+          {/* Footer */}
+          <footer className="px-6 py-12 border-t border-stone-200 dark:border-stone-800 mt-12 bg-white/30 dark:bg-stone-900/30">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+              <div className="text-center md:text-left">
+                <p className="text-sm font-serif italic font-bold">Family and Friends AFL Tipping</p>
+                <p className="text-[10px] text-stone-400 uppercase tracking-widest mt-1">Built for the 2026 AFL Season</p>
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2 text-[10px] font-bold text-stone-400 uppercase tracking-widest">
+                  <div className="w-2 h-2 rounded-full bg-afl-accent animate-pulse"></div>
+                  Live Data from Squiggle API
+                </div>
+              </div>
             </div>
-          </div>
+          </footer>
         </div>
-      </footer>
+      </div>
 
       {/* Round Recap Modal */}
       {isRoundRecapOpen && (
@@ -3607,6 +4487,30 @@ Good luck in Round ${round + 1}! 🍀`;
                 >
                   <XCircle className="w-6 h-6 text-stone-400" />
                 </button>
+              </div>
+
+              {/* Round Selector in Modal */}
+              <div className="mb-6 relative">
+                <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide mask-fade-right">
+                  {rounds.map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setRecapRound(r)}
+                      className={cn(
+                        "flex-shrink-0 px-4 py-2 rounded-xl text-[10px] font-bold transition-all border",
+                        recapRound === r
+                          ? "text-white border-transparent shadow-lg"
+                          : "bg-white dark:bg-stone-900 text-stone-500 border-stone-100 dark:border-stone-800 hover:border-stone-200 dark:hover:border-stone-700"
+                      )}
+                      style={recapRound === r ? { 
+                        backgroundColor: accentColor,
+                        boxShadow: `0 4px 12px ${accentColor}40`
+                      } : {}}
+                    >
+                      {getRoundLabel(r)}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="bg-stone-50 dark:bg-stone-800/50 p-6 rounded-2xl border border-stone-100 dark:border-stone-800 mb-8 font-mono text-sm whitespace-pre-wrap max-h-[400px] overflow-y-auto">
@@ -3642,6 +4546,8 @@ Good luck in Round ${round + 1}! 🍀`;
         </div>
       )}
 
+
+      
       {/* Delete User Confirmation Modal */}
       {userToDelete && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -3680,6 +4586,211 @@ Good luck in Round ${round + 1}! 🍀`;
           </div>
         </div>
       )}
+
+      {/* Pending Tips Confirmation Bar */}
+      <AnimatePresence>
+        {Object.keys(pendingTips).length > 0 && (
+          <motion.div 
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[90] w-full max-w-2xl px-4"
+          >
+            <div className="bg-stone-900 dark:bg-stone-800 text-white p-4 rounded-3xl shadow-2xl border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4 backdrop-blur-xl">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-afl-accent/20 rounded-2xl flex items-center justify-center">
+                  <FileSpreadsheet className="w-5 h-5 text-afl-accent" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold">Unposted Selections</p>
+                  <p className="text-[10px] text-stone-400 uppercase tracking-widest">
+                    {Object.keys(pendingTips).length} tips ready for Round {currentRound}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <button 
+                  onClick={cancelPendingTips}
+                  disabled={isActionLoading}
+                  className="flex-1 sm:flex-none px-6 py-2.5 bg-white/5 hover:bg-white/10 text-stone-300 rounded-xl text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={postPendingTips}
+                  disabled={isActionLoading}
+                  className="flex-1 sm:flex-none px-8 py-2.5 bg-afl-navy text-white rounded-xl text-xs font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isActionLoading ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  ) : (
+                    <>
+                      <Zap className="w-4 h-4" /> Confirm & Post
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Post Tips Confirmation Modal */}
+      <AnimatePresence>
+        {isConfirmingPost && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-stone-900 w-full max-w-xl rounded-3xl shadow-2xl border border-stone-200 dark:border-stone-800 overflow-hidden"
+            >
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-2xl font-serif italic text-stone-900 dark:text-stone-100">Review Your Tips</h3>
+                    <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono mt-1">Round {currentRound} Selection Summary</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsConfirmingPost(false)}
+                    className="p-2 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors"
+                  >
+                    <X className="w-5 h-5 text-stone-400" />
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-stone-200 dark:scrollbar-thumb-stone-800">
+                  {(Object.values(pendingTips) as Tip[]).sort((a, b) => a.gameId - b.gameId).map(tip => {
+                    const game = games.find(g => g.id === tip.gameId);
+                    if (!game) return null;
+                    return (
+                      <div key={tip.gameId} className="flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
+                        <div className="flex-1">
+                          <p className="text-[9px] text-stone-400 uppercase font-bold mb-1">
+                            {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE h:mm a')}
+                          </p>
+                          <p className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                            {game.hometeam} vs {game.awayteam}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[9px] text-afl-accent uppercase font-black mb-1">Selection</p>
+                          <p 
+                            className="text-sm font-bold text-black dark:text-white"
+                            style={{ fontFamily: 'Arial, sans-serif' }}
+                          >
+                            {tip.selectedTeam}
+                            {tip.margin !== undefined && (
+                              <span className="ml-2 text-stone-400 font-mono not-italic text-xs">
+                                ({tip.margin} pts)
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-8 flex flex-col sm:flex-row gap-3">
+                  <button 
+                    onClick={handlePrint}
+                    disabled={!allGamesTipped || isActionLoading}
+                    className={cn(
+                      "flex-1 py-4 rounded-2xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2",
+                      allGamesTipped 
+                        ? "bg-stone-900 dark:bg-stone-100 dark:text-stone-900 text-white hover:bg-stone-800 dark:hover:bg-white" 
+                        : "bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed"
+                    )}
+                    title={!allGamesTipped ? `Select all teams (${tippedCount}/${roundGames.length}) to enable printing` : "Print your selections"}
+                  >
+                    <Printer className="w-4 h-4" /> Print Selections
+                  </button>
+                  <button 
+                    onClick={() => setIsConfirmingPost(false)}
+                    disabled={isActionLoading}
+                    className="flex-1 py-4 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 rounded-2xl text-sm font-bold hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors disabled:opacity-50"
+                  >
+                    Back to Editing
+                  </button>
+                  <button 
+                    onClick={finalizePostTips}
+                    disabled={isActionLoading}
+                    className="flex-1 py-4 bg-afl-navy text-white rounded-2xl text-sm font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isActionLoading ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4" /> Finalize & Post Tips
+                      </>
+                    )}
+                  </button>
+                </div>
+                
+                <p className="text-[10px] text-center text-stone-400 mt-4 uppercase tracking-widest font-bold opacity-60">
+                  Once posted, tips are locked after game kick-off
+                </p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <WarRoomPopup 
+        isOpen={showWarRoomPopup}
+        onClose={() => setShowWarRoomPopup(false)}
+        leader={leader}
+        lastPlace={lastPlace}
+        nextGame={nextGame}
+      />
+      </div>
+
+      {/* Hidden Print Section */}
+      <div className="hidden print:block fixed inset-0 bg-white z-[9999] p-10 text-stone-900">
+        <div className="max-w-2xl mx-auto">
+          <div className="border-b-4 border-stone-900 pb-6 mb-8">
+            <h1 className="text-4xl font-serif italic text-stone-900">Round {currentRound} Selections</h1>
+            <div className="mt-4 flex justify-between text-sm font-bold uppercase tracking-widest text-stone-500">
+              <span>Player: {allUsers.find(u => u.uid === warRoomUserId)?.displayName}</span>
+              <span>Date: {new Date().toLocaleDateString()}</span>
+            </div>
+          </div>
+          <div className="space-y-6">
+            {roundGames.map(game => {
+              const tip = warRoomTips.find(t => t.gameId === game.id);
+              return (
+                <div key={game.id} className="flex justify-between items-center border-b border-stone-100 pb-4">
+                  <div>
+                    <p className="text-xs text-stone-400 font-bold uppercase mb-1">
+                      {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')}
+                    </p>
+                    <p className="text-lg font-bold text-stone-900">{game.hometeam} vs {game.awayteam}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xl font-black text-stone-900">{tip?.selectedTeam || 'NO SELECTION'}</p>
+                    {tip?.margin !== undefined && (
+                      <p className="text-sm font-bold text-stone-500">Margin: {tip.margin}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-12 pt-8 border-t border-stone-100 text-center">
+            <p className="text-[10px] text-stone-400 uppercase tracking-[0.3em] font-bold">AFL Tipping 2026 • Tactical Command Summary</p>
+          </div>
+        </div>
+      </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
   );
 }

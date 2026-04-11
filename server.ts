@@ -1,7 +1,11 @@
 import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -9,26 +13,48 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   try {
     const app = express();
+    app.use(cors());
     const PORT = 3000; // Hardcoded to 3000 as per environment requirements
 
     // Simple in-memory cache
     const cache = new Map<string, { data: any; timestamp: number }>();
-    const CACHE_TTL = 1000 * 60 * 60; // 1 hour
+    const CACHE_TTL = 1000 * 60 * 60; // 1 hour default
+    const GAMES_CACHE_TTL = 1000 * 60; // 1 minute for live scores
 
-    const fetchWithTimeout = async (url: string, options: any = {}, timeout = 15000) => {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeout);
-      try {
-        const response = await fetch(url, {
-          ...options,
-          signal: controller.signal,
-        });
-        clearTimeout(id);
-        return response;
-      } catch (error) {
-        clearTimeout(id);
-        throw error;
+    const fetchWithRetry = async (url: string, options: any = {}, retries = 3, timeout = 15000) => {
+      const headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ...options.headers
+      };
+
+      for (let i = 0; i < retries; i++) {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeout);
+        
+        try {
+          console.log(`Attempt ${i + 1} for ${url}...`);
+          const response = await fetch(url, {
+            ...options,
+            headers,
+            signal: controller.signal,
+          });
+          clearTimeout(id);
+          
+          if (response.ok) return response;
+          
+          console.warn(`Attempt ${i + 1} failed with status: ${response.status}`);
+        } catch (error) {
+          clearTimeout(id);
+          console.warn(`Attempt ${i + 1} error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        
+        // Wait before retrying (exponential backoff)
+        if (i < retries - 1) {
+          const delay = Math.pow(2, i) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
+      throw new Error(`Failed to fetch ${url} after ${retries} attempts`);
     };
 
     // Hardcoded fallbacks for total API failure
@@ -87,31 +113,28 @@ async function startServer() {
       const cacheKey = `games-${year}`;
       const cached = cache.get(cacheKey);
 
-      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      if (cached && Date.now() - cached.timestamp < GAMES_CACHE_TTL) {
         console.log(`Returning cached games for ${year}`);
         return res.json(cached.data);
       }
 
       try {
-        const headers = { "User-Agent": "AFLTippingApp/1.0" };
         console.log(`Fetching games for year: ${year}...`);
         
-        let response = await fetchWithTimeout(`https://api.squiggle.com.au/?q=games&year=${year}`, { headers });
-        
-        if (!response.ok) {
-          throw new Error(`Squiggle API responded with status: ${response.status}`);
-        }
+        let response = await fetchWithRetry(`https://api.squiggle.com.au/?q=games&year=${year}`);
         let data = await response.json();
+        data.source = 'live';
         
         // If no games for 2026, fallback to 2025 for demo purposes
         if (year === "2026" && (!data.games || data.games.length === 0)) {
           console.log("No 2026 games found, falling back to 2025");
           try {
-            response = await fetchWithTimeout("https://api.squiggle.com.au/?q=games&year=2025", { headers });
+            response = await fetchWithRetry("https://api.squiggle.com.au/?q=games&year=2025");
             data = await response.json();
+            data.source = 'fallback';
           } catch (e) {
             console.warn("2025 fallback failed, using hardcoded fallback");
-            data = FALLBACK_GAMES;
+            data = { ...FALLBACK_GAMES, source: 'fallback' };
           }
         }
         
@@ -123,10 +146,10 @@ async function startServer() {
         console.warn(`Squiggle API (games) issue: ${errorMessage}. Attempting fallback...`);
         if (cached) {
           console.log("Returning stale cache due to API error");
-          return res.json(cached.data);
+          return res.json({ ...cached.data, source: 'cache' });
         }
         console.log("Returning hardcoded fallback games");
-        res.json(FALLBACK_GAMES);
+        res.json({ ...FALLBACK_GAMES, source: 'fallback' });
       }
     });
 
@@ -141,25 +164,22 @@ async function startServer() {
       }
 
       try {
-        const headers = { "User-Agent": "AFLTippingApp/1.0" };
         console.log(`Fetching standings for year: ${year}...`);
         
-        let response = await fetchWithTimeout(`https://api.squiggle.com.au/?q=standings&year=${year}`, { headers });
-        
-        if (!response.ok) {
-          throw new Error(`Squiggle API responded with status: ${response.status}`);
-        }
+        let response = await fetchWithRetry(`https://api.squiggle.com.au/?q=standings&year=${year}`);
         let data = await response.json();
+        data.source = 'live';
 
         // Fallback to 2025 if 2026 is empty
         if (year === "2026" && (!data.standings || data.standings.length === 0)) {
           console.log("No 2026 standings found, falling back to 2025");
           try {
-            response = await fetchWithTimeout("https://api.squiggle.com.au/?q=standings&year=2025", { headers });
+            response = await fetchWithRetry("https://api.squiggle.com.au/?q=standings&year=2025");
             data = await response.json();
+            data.source = 'fallback';
           } catch (e) {
             console.warn("2025 fallback failed, using hardcoded fallback");
-            data = FALLBACK_STANDINGS;
+            data = { ...FALLBACK_STANDINGS, source: 'fallback' };
           }
         }
 
@@ -171,10 +191,10 @@ async function startServer() {
         console.warn(`Squiggle API (standings) issue: ${errorMessage}. Attempting fallback...`);
         if (cached) {
           console.log("Returning stale cache due to API error");
-          return res.json(cached.data);
+          return res.json({ ...cached.data, source: 'cache' });
         }
         console.log("Returning hardcoded fallback standings");
-        res.json(FALLBACK_STANDINGS);
+        res.json({ ...FALLBACK_STANDINGS, source: 'fallback' });
       }
     });
 
@@ -188,13 +208,10 @@ async function startServer() {
       }
 
       try {
-        const headers = { "User-Agent": "AFLTippingApp/1.0" };
         console.log("Fetching teams...");
-        const response = await fetchWithTimeout("https://api.squiggle.com.au/?q=teams", { headers });
-        if (!response.ok) {
-          throw new Error(`Squiggle API responded with status: ${response.status}`);
-        }
+        const response = await fetchWithRetry("https://api.squiggle.com.au/?q=teams");
         const data = await response.json();
+        data.source = 'live';
         console.log(`Successfully fetched ${data.teams?.length || 0} teams.`);
         cache.set(cacheKey, { data, timestamp: Date.now() });
         res.json(data);
@@ -203,10 +220,10 @@ async function startServer() {
         console.warn(`Squiggle API (teams) issue: ${errorMessage}. Attempting fallback...`);
         if (cached) {
           console.log("Returning stale cache due to API error");
-          return res.json(cached.data);
+          return res.json({ ...cached.data, source: 'cache' });
         }
         console.log("Returning hardcoded fallback teams");
-        res.json(FALLBACK_TEAMS);
+        res.json({ ...FALLBACK_TEAMS, source: 'fallback' });
       }
     });
 

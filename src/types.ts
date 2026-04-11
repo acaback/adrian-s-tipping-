@@ -22,7 +22,6 @@ export interface UserProfile {
   role: 'admin' | 'user';
   totalPoints: number;
   totalMargin: number;
-  unlockedRounds?: number[];
   favoriteTeam?: string;
   preferences?: {
     emailNotifications?: boolean;

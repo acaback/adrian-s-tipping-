@@ -6,45 +6,52 @@ service cloud.firestore {
     // ===============================================================
     //
     // Collection: users
+    // Document ID: {uid}
     // Fields:
-    //   - uid: string (required)
-    //   - displayName: string
-    //   - email: string (required)
-    //   - role: string (admin/user)
-    //   - totalPoints: number
-    //   - totalMargin: number
-    //   - unlockedRounds: list (numbers)
+    //   - uid: string (required, immutable)
+    //   - displayName: string (max 100)
+    //   - email: string (required, immutable, max 100)
+    //   - role: string (admin/user, immutable for users)
+    //   - totalPoints: number (non-negative)
+    //   - totalMargin: number (non-negative)
+    //   - unlockedRounds: list (numbers, max 30)
     //
     // Collection: public_profiles
+    // Document ID: {uid}
     // Fields:
-    //   - uid: string (required)
-    //   - displayName: string
-    //   - role: string
+    //   - uid: string (required, immutable)
+    //   - displayName: string (max 100)
+    //   - role: string (immutable for users)
     //   - totalPoints: number
     //   - totalMargin: number
+    //   - favoriteTeam: string (max 50)
     //
     // Collection: teams
+    // Document ID: {teamId}
     // Fields:
     //   - id: number (required)
-    //   - name: string
-    //   - abbrev: string
-    //   - logo: string
+    //   - name: string (max 100)
+    //   - abbrev: string (max 10)
+    //   - logo: string (max 500)
     //
     // Collection: games
+    // Document ID: {gameId}
     // Fields:
     //   - id: number (required)
     //   - round: number
-    //   - winner: string
+    //   - date: string (ISO 8601, required for tip locking)
     //   - isFinished: bool
-    //   ... (Squiggle API fields)
+    //   ...
     //
     // Collection: tips
+    // Document ID: {uid}_{gameId}
     // Fields:
-    //   - uid: string (required)
-    //   - gameId: number (required)
-    //   - round: number
-    //   - selectedTeam: string
+    //   - uid: string (required, immutable)
+    //   - gameId: number (required, immutable)
+    //   - round: number (required, immutable)
+    //   - selectedTeam: string (required, max 100)
     //   - margin: number (optional)
+    //   - updatedAt: timestamp (required)
     //
     // ===============================================================
 
@@ -59,63 +66,98 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-        request.auth.token.email == "acaback@gmail.com"
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.email == "acaback@gmail.com" && request.auth.token.email_verified == true)
       );
     }
 
+    function fieldUnchanged(field) {
+      return !(field in request.resource.data) || request.resource.data[field] == resource.data[field];
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // Domain Validators
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
-             data.uid is string &&
-             data.email is string &&
-             data.email.size() < 100 &&
-             data.role in ['admin', 'user'];
+             data.uid is string && (data.uid == request.auth.uid || isAdmin()) &&
+             data.email is string && isValidEmail(data.email) && data.email.size() <= 100 &&
+             data.role in ['admin', 'user'] &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (!('totalPoints' in data) || data.totalPoints is number) &&
+             (!('totalMargin' in data) || data.totalMargin is number) &&
+             (!('unlockedRounds' in data) || (data.unlockedRounds is list && data.unlockedRounds.size() <= 30)) &&
+             (!('unlockedGames' in data) || (data.unlockedGames is list && data.unlockedGames.size() <= 500));
     }
 
     function isValidPublicProfile(data) {
       return data.keys().hasAll(['uid', 'displayName', 'role']) &&
-             data.uid is string &&
-             data.displayName is string &&
-             data.displayName.size() < 100 &&
-             data.role in ['admin', 'user'];
-    }
-
-    function isValidTeam(data) {
-      return data.keys().hasAll(['id', 'name', 'abbrev']) &&
-             data.id is number &&
-             data.name is string &&
-             data.name.size() < 100 &&
-             data.abbrev is string &&
-             data.abbrev.size() < 10;
+             data.uid is string && (data.uid == request.auth.uid || isAdmin()) &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.role in ['admin', 'user'] &&
+             (!('favoriteTeam' in data) || (data.favoriteTeam is string && data.favoriteTeam.size() <= 50));
     }
 
     function isValidTip(data) {
       return data.keys().hasAll(['uid', 'gameId', 'round', 'selectedTeam']) &&
+             data.uid is string && (data.uid == request.auth.uid || isAdmin()) &&
              data.gameId is number &&
              data.round is number &&
-             data.selectedTeam is string &&
-             (!('margin' in data) || data.margin is number);
+             data.selectedTeam is string && data.selectedTeam.size() <= 100 &&
+             (!('margin' in data) || data.margin is number) &&
+             (!('updatedAt' in data) || isValidDateString(data.updatedAt));
     }
 
     // Rules
     match /users/{userId} {
+      // Strictly private: Only owner or admin can read
       allow get: if isOwner(userId) || isAdmin();
-      allow list: if isAdmin() || (isAuthenticated() && request.query.filters.email == request.auth.token.email);
-      allow create: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
-      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role && isValidUser(request.resource.data));
+      // Only admin can list users
+      allow list: if isAdmin();
+      
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && 
+                      request.resource.data.role == 'user'; // Users can't create themselves as admin
+      
+      allow update: if (isAdmin() && isValidUser(request.resource.data)) || (
+        isOwner(userId) && 
+        isValidUser(request.resource.data) &&
+        fieldUnchanged('role') && // Users can't promote themselves
+        fieldUnchanged('uid') &&
+        fieldUnchanged('email') &&
+        fieldUnchanged('unlockedRounds') &&
+        fieldUnchanged('unlockedGames')
+      );
+      
       allow delete: if isAdmin();
     }
 
     match /public_profiles/{userId} {
+      // Publicly readable by authenticated users
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidPublicProfile(request.resource.data);
-      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role && isValidPublicProfile(request.resource.data));
+      
+      allow create: if isAuthenticated() && isOwner(userId) && isValidPublicProfile(request.resource.data) &&
+                      request.resource.data.role == 'user';
+      
+      allow update: if (isAdmin() && isValidPublicProfile(request.resource.data)) || (
+        isOwner(userId) && 
+        isValidPublicProfile(request.resource.data) &&
+        fieldUnchanged('role') &&
+        fieldUnchanged('uid')
+      );
+      
       allow delete: if isAdmin();
     }
 
     match /teams/{teamId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin() && isValidTeam(request.resource.data);
+      allow write: if isAdmin();
     }
 
     match /games/{gameId} {
@@ -124,15 +166,25 @@ service cloud.firestore {
     }
 
     match /tips/{tipId} {
+      // Allow authenticated users to read all tips for leaderboard and results.
+      // In a more advanced version, we could hide tips until game start.
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidTip(request.resource.data) && (request.resource.data.uid == request.auth.uid || isAdmin());
+      
+      allow create: if isAuthenticated() && 
+                      (isOwner(request.resource.data.uid) || isAdmin()) && 
+                      isValidTip(request.resource.data);
+      
       allow update: if isAdmin() || (
-        isAuthenticated() && 
-        resource.data.uid == request.auth.uid && 
+        isOwner(resource.data.uid) && 
         isValidTip(request.resource.data) &&
-        request.resource.data.uid == resource.data.uid
+        fieldUnchanged('uid') &&
+        fieldUnchanged('gameId') &&
+        fieldUnchanged('round')
       );
-      allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      
+      allow delete: if isAdmin() || (
+        isOwner(resource.data.uid)
+      );
     }
   }
 }
