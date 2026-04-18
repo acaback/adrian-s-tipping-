@@ -23,6 +23,8 @@ export interface UserProfile {
   totalPoints: number;
   totalMargin: number;
   favoriteTeam?: string;
+  prevRank?: number;
+  form?: string[]; // Array of 'W', 'L', 'D'
   preferences?: {
     emailNotifications?: boolean;
     weeklySummary?: boolean;
@@ -38,6 +40,8 @@ export interface PublicProfile {
   totalPoints: number;
   totalMargin: number;
   favoriteTeam?: string;
+  prevRank?: number;
+  form?: string[];
 }
 
 export interface Tip {
@@ -53,4 +57,16 @@ export interface Tip {
 export interface RoundStatus {
   round: number;
   isLocked: boolean;
+}
+
+export interface BlogPost {
+  id: string;
+  title: string;
+  excerpt: string;
+  content: string;
+  author: string;
+  category: 'News' | 'Analysis' | 'Injuries' | 'Tactics';
+  date: string;
+  image?: string;
+  readTime?: string;
 }

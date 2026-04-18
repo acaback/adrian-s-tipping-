@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, Component, ErrorInfo, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   GoogleAuthProvider, 
   signInWithPopup, 
@@ -26,7 +27,9 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Game, UserProfile, Tip } from './types';
+import { Game, UserProfile, Tip, BlogPost } from './types';
+import ErrorBoundary from './components/ErrorBoundary';
+import BlogPage from './components/BlogPage';
 import { 
   Trophy, 
   Calendar, 
@@ -61,19 +64,22 @@ import {
   Star,
   LayoutGrid,
   Shield,
+  BookOpen,
   Plus,
   Minus,
   Copy,
   Check,
   Loader2,
   Printer,
-  Menu
+  Menu,
+  Info
 } from 'lucide-react';
 import { format, isAfter, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI } from "@google/genai";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -84,6 +90,103 @@ const Skeleton = ({ className }: { className?: string }) => (
 );
 
 const AWST_TIMEZONE = 'Australia/Perth';
+
+const BLOG_POSTS: BlogPost[] = [
+  {
+    id: 'post-1',
+    title: 'AFL Tipping: Round 5 Strategy Breakdown',
+    excerpt: 'The season is heating up and Round 5 presents some of the toughest matchups yet. We break down the key tactical battles that will decide your tipping week.',
+    content: `
+The 2026 AFL season has already thrown up some massive surprises, and Round 5 is shaping up to be another defining weekend. With several top-of-the-table clashes and a few "danger games" for the favorites, tipping correctly this week requires a deep dive into the stats.
+
+## The Big Matchup: Magpies vs. Lions
+Expect a high-scoring affair at the MCG. The Lions have been dominant in the clearances, but the Magpies' transition speed remains the best in the league. 
+
+**Prediction:** Magpies by 12.
+
+## Injury Concerns
+Several key players are facing late fitness tests. Make sure to check the latest reports before the first bounce on Thursday night. 
+
+*   **Marcus Bontempelli:** Managing a minor calf strain.
+*   **Jeremy Cameron:** Day-to-day after a heavy hit last week.
+
+## Venue Advantage
+Keep an eye on the SCG factors. The smaller dimensions often favor teams with strong defensive structures and intercept marking.
+
+Stay tuned to the Command Center for live updates.
+    `,
+    author: 'Chief Analyst',
+    category: 'Analysis',
+    date: '2026-04-16T10:00:00Z',
+    image: 'https://picsum.photos/seed/mcg-melbourne/1200/600',
+    readTime: '6 min read'
+  },
+  {
+    id: 'post-2',
+    title: 'Injury Report: Key Ins & Outs for the Weekend',
+    excerpt: 'The latest team sheets are in. Several stars are set to return, while others face extended time on the sidelines. Find out how this shifts the odds.',
+    content: `
+Team selection night always brings a mix of joy and despair for tippers. Here is the definitive list of key personnel changes for the upcoming round.
+
+### Collingwood
+**IN:** Scott Pendlebury, Nick Daicos
+**OUT:** Brayden Maynard (Suspended)
+
+### Brisbane
+**IN:** Harris Andrews
+**OUT:** Zero major omissions.
+
+### Strategy Tip
+With Pendlebury and Daicos back, Collingwood's midfield depth becomes significantly more reliable. If you were on the fence about the Pies, this might be the deciding factor.
+    `,
+    author: 'Medical Scout',
+    category: 'Injuries',
+    date: '2026-04-15T16:00:00Z',
+    image: 'https://picsum.photos/seed/perth-stadium-optus/1200/600',
+    readTime: '4 min read'
+  },
+  {
+    id: 'post-3',
+    title: 'Data Deep Dive: The Accuracy Myth',
+    excerpt: 'Does goal-kicking accuracy actually win games? We look at the last 50 matches to see the correlation between conversion rates and victory.',
+    content: `
+Common wisdom says "bad kicking is bad football." But does the data back it up? We analyzed the last 50 games of the 2026 season to find the truth.
+
+### Key Findings
+1.  **Inner Consistency:** Teams that win more than 60% of their inside-50s win 85% of their games, regardless of goal-kicking accuracy.
+2.  **Pressure Gauge:** Goal accuracy drops by average of 14% when the opposition tackle count is above 70.
+
+### Conclusion
+Don't tip based solely on who has the better forward line on paper. Look at who wins the contested ball and creates the most opportunities.
+    `,
+    author: 'Stats Guru',
+    category: 'Tactics',
+    date: '2026-04-14T09:00:00Z',
+    image: 'https://picsum.photos/seed/adelaide-oval-night/1200/600',
+    readTime: '8 min read'
+  },
+  {
+    id: 'post-4',
+    title: 'Round 6 Preview: Rivalry Round',
+    excerpt: 'The biggest rivalries in the game take center stage. We look at the history and the current form to help you find the edge.',
+    content: `
+Round 6 is officially "Rivalry Round" and the schedule is absolutely stacked. From the Showdown in Adelaide to the Sydney Derby, these games often defy the ladder positions.
+
+## The Showdown: Crows vs. Power
+Historically, the underdog wins 45% of Showdowns. With Adelaide struggling and Port firing, could we be in for an upset?
+
+## The Western Derby
+Fremantle's defense is the stingiest in the league, but West Coast's young forward line is finding rhythm. 
+
+**Watch Out For:** The weather in Perth could play a massive role if the predicted storm hits.
+`,
+    author: 'Chief Analyst',
+    category: 'Analysis',
+    date: '2026-04-12T10:00:00Z',
+    image: 'https://picsum.photos/seed/scg-sydney-stadium/1200/600',
+    readTime: '7 min read'
+  }
+];
 
 const AFL_TEAMS = [
   'Adelaide Crows', 'Brisbane Lions', 'Carlton Blues', 'Collingwood Magpies',
@@ -131,6 +234,170 @@ const AFL_TEAM_COLORS: Record<string, string> = {
   'West Coast Eagles': '#002C73',
   'Western Bulldogs': '#014896',
   'Western Bulldogs Bulldogs': '#014896'
+};
+
+const TEAM_GRADIENTS: Record<string, string> = {
+  'Adelaide': 'from-[#002B5C] via-[#E21E31] to-[#FFB800]',
+  'Brisbane': 'from-[#730040] via-[#FFB800] to-[#0055A3]',
+  'Carlton': 'from-[#0E1E2D] to-[#1a2b3c]',
+  'Collingwood': 'from-black via-stone-800 to-black',
+  'Essendon': 'from-[#CC2031] to-black',
+  'Fremantle': 'from-[#201647] via-[#FFFFFF] to-[#201647]',
+  'Geelong': 'from-[#1C3C63] via-[#FFFFFF] to-[#1C3C63]',
+  'Gold Coast': 'from-[#E11C22] via-[#FFD200] to-[#E11C22]',
+  'GWS': 'from-[#F15C22] via-[#333333] to-[#F15C22]',
+  'Hawthorn': 'from-[#4D2004] via-[#FFD200] to-[#4D2004]',
+  'Melbourne': 'from-[#0F1131] via-[#CC2031] to-[#0F1131]',
+  'North Melbourne': 'from-[#013B9F] via-[#FFFFFF] to-[#013B9F]',
+  'Port Adelaide': 'from-black via-[#008AAB] to-[#FFFFFF]',
+  'Richmond': 'from-black via-[#FFD200] to-black',
+  'St Kilda': 'from-[#ED0F05] via-black to-[#FFFFFF]',
+  'Sydney': 'from-[#ED171F] via-[#FFFFFF] to-[#ED171F]',
+  'West Coast': 'from-[#002C73] via-[#FFD200] to-[#002C73]',
+  'Western Bulldogs': 'from-[#014896] via-[#ED171F] to-[#FFFFFF]'
+};
+
+const AIScout = ({ game, standings }: { game: Game, standings: any[] }) => {
+  const [insight, setInsight] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+
+  const getInsight = async () => {
+    console.log("AI Scout: Deploying for", game.hometeam, "vs", game.awayteam);
+    setLoading(true);
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is not defined in the environment.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      const hTeamStanding = standings.find(s => s.name === game.hometeam);
+      const aTeamStanding = standings.find(s => s.name === game.awayteam);
+
+      const prompt = `As an expert AFL analyst for the "War Room", provide a brief (max 60 words) tactical preview for ${game.hometeam} vs ${game.awayteam}. 
+      Context: ${game.hometeam} is rank ${hTeamStanding?.rank || 'N/A'}, ${game.awayteam} is rank ${aTeamStanding?.rank || 'N/A'}. 
+      Venue: ${game.venue}. 
+      Be bold, use footy slang, and suggest a winner.`;
+
+      console.log("AI Scout: Sending prompt...");
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+      });
+
+      console.log("AI Scout: Received response", response);
+      const text = response.text || "Scout is speechless. Try again!";
+      setInsight(text);
+      setShowModal(true);
+    } catch (error) {
+      console.error("AI Scout failed:", error);
+      setInsight("Scout is currently unavailable. Trust your gut!");
+      setShowModal(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="mt-4 p-4 bg-black/40 backdrop-blur-sm rounded-2xl border border-white/10" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-afl-accent">
+            <Zap className="w-4 h-4 fill-current" />
+            <span className="text-[10px] font-bold uppercase tracking-widest">Let AI Help Pick Your Tips</span>
+          </div>
+          {!loading && (
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                if (insight) {
+                  setShowModal(true);
+                } else {
+                  getInsight();
+                }
+              }}
+              className="text-[12px] font-bold text-red-500 hover:text-red-400 transition-colors"
+            >
+              {insight ? 'View Report' : 'Deploy'}
+            </button>
+          )}
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-white/40 text-[10px] italic">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Analyzing matchups...
+          </div>
+        ) : (
+          <p className="text-[10px] text-white/40 italic">
+            {insight ? 'Report ready. Click view to read.' : 'Click deploy to get tactical insights for this matchup.'}
+          </p>
+        )}
+      </div>
+
+      {showModal && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            onClick={() => setShowModal(false)}
+            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+          />
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="relative w-full max-w-md bg-stone-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-white/5 bg-gradient-to-r from-afl-navy to-stone-900">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-afl-accent/20 flex items-center justify-center">
+                    <Zap className="w-6 h-6 text-afl-accent fill-current" />
+                  </div>
+                  <div>
+                    <h3 className="text-white font-serif italic text-xl">Let AI Help Pick Your Tips</h3>
+                    <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">{game.hometeam} v {game.awayteam}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowModal(false)}
+                  className="p-2 hover:bg-white/5 rounded-full text-stone-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-8 bg-stone-900/50">
+              <div className="relative">
+                <div className="absolute -left-4 top-0 bottom-0 w-1 bg-afl-accent rounded-full opacity-50" />
+                <p 
+                  className="text-white leading-relaxed italic"
+                  style={{ 
+                    fontFamily: 'Arial, sans-serif',
+                    fontSize: '12px'
+                  }}
+                >
+                  "{insight}"
+                </p>
+              </div>
+            </div>
+
+            <div className="p-6 bg-stone-900 border-t border-white/5 flex justify-end">
+              <button 
+                onClick={() => setShowModal(false)}
+                className="px-6 py-2 bg-afl-accent text-afl-navy font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-afl-accent/90 transition-all active:scale-95"
+              >
+                Dismiss
+              </button>
+            </div>
+          </motion.div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
 };
 
 const ADMIN_EMAIL = "acaback@gmail.com";
@@ -201,81 +468,6 @@ interface StandingsItem {
   draws: number;
   pts: number;
   percentage: number;
-}
-
-// Error Boundary Component
-interface ErrorBoundaryProps {
-  children: ReactNode;
-}
-
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: Error | null;
-}
-
-class ErrorBoundary extends React.Component<any, any> {
-  constructor(props: any) {
-    super(props);
-    (this as any).state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Uncaught error:", error, errorInfo);
-  }
-
-  render() {
-    const self = this as any;
-    if (self.state.hasError) {
-      let errorMessage = "Something went wrong.";
-      let details = "";
-
-      try {
-        // Check if the error message is a JSON string from handleFirestoreError
-        const parsedError = JSON.parse(self.state.error?.message || "");
-        if (parsedError.error && parsedError.operationType) {
-          errorMessage = `Database Error: ${parsedError.operationType.toUpperCase()} failed.`;
-          details = parsedError.error;
-        }
-      } catch (e) {
-        // Not a JSON error, use the standard error message
-        errorMessage = self.state.error?.message || errorMessage;
-      }
-
-      return (
-        <div className="min-h-screen bg-stone-100 dark:bg-stone-950 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white dark:bg-stone-900 p-8 rounded-3xl shadow-2xl border border-red-500/20">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="p-3 bg-red-500/10 rounded-2xl">
-                <AlertCircle className="w-8 h-8 text-red-500" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-stone-900 dark:text-white">Application Error</h1>
-                <p className="text-stone-500 dark:text-stone-400 text-sm">We ran into an unexpected problem.</p>
-              </div>
-            </div>
-            
-            <div className="bg-stone-50 dark:bg-stone-800/50 p-4 rounded-2xl mb-6 border border-stone-200 dark:border-stone-700">
-              <p className="text-stone-800 dark:text-stone-200 font-medium mb-1">{errorMessage}</p>
-              {details && <p className="text-stone-500 dark:text-stone-400 text-xs font-mono break-all">{details}</p>}
-            </div>
-
-            <button
-              onClick={() => window.location.reload()}
-              className="w-full py-4 bg-afl-navy text-white rounded-2xl font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20"
-            >
-              Reload Application
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    return self.props.children;
-  }
 }
 
 function WarRoomPopup({ 
@@ -432,7 +624,8 @@ function AppContent() {
   const [allTips, setAllTips] = useState<Tip[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentRound, setCurrentRound] = useState(1);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile' | 'blog'>('dashboard');
+  const [selectedBlogPostId, setSelectedBlogPostId] = useState<string | null>(null);
   const [selectedProfileUserId, setSelectedProfileUserId] = useState<string | null>(null);
   const [profileSourceTab, setProfileSourceTab] = useState<'leaderboard' | 'results' | 'admin'>('leaderboard');
   const [standings, setStandings] = useState<StandingsItem[]>([]);
@@ -919,6 +1112,23 @@ Good luck in Round ${round + 1}! 🍀`;
     }
   };
 
+  // Auto-refresh scores if games are live
+  useEffect(() => {
+    const hasLiveGames = games.some(g => {
+      const now = new Date();
+      const gameDate = new Date(g.date);
+      return now > gameDate && !g.isFinished;
+    });
+
+    if (hasLiveGames) {
+      console.log("Live games detected. Starting auto-refresh (60s)...");
+      const interval = setInterval(() => {
+        fetchGames(false);
+      }, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [games]);
+
   const fetchStandings = async (retryCount = 0) => {
     setIsFetchingStandings(true);
     try {
@@ -1263,10 +1473,23 @@ Good luck in Round ${round + 1}! 🍀`;
         }
       });
 
+      // Calculate Form (Last 5 finished games)
+      const finishedGamesWithTips = games
+        .filter(g => g.isFinished)
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 5);
+      
+      const form = finishedGamesWithTips.map(game => {
+        const tip = userTips.find(t => t.gameId === game.id);
+        if (!tip) return 'L'; // No tip counts as a loss
+        return game.winner === tip.selectedTeam ? 'W' : 'L';
+      }).reverse();
+
       return {
         ...u,
         calculatedPoints: points,
-        calculatedMargin: marginError
+        calculatedMargin: marginError,
+        form: form
       } as LeaderboardItem;
     });
 
@@ -1835,7 +2058,7 @@ Good luck in Round ${round + 1}! 🍀`;
     if (profile?.favoriteTeam && AFL_TEAM_COLORS[profile.favoriteTeam]) {
       return AFL_TEAM_COLORS[profile.favoriteTeam];
     }
-    return '#002B5C'; // Default AFL Navy
+    return '#10b981'; // Default Emerald Green
   }, [profile]);
 
   const rounds = useMemo(() => {
@@ -1987,10 +2210,6 @@ Good luck in Round ${round + 1}! 🍀`;
 
   return (
     <div className="min-h-screen bg-[#F5F5F0] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans transition-colors duration-300">
-      {/* NUCLEAR REFRESH BANNER - Confirming Code Update */}
-      <div className="bg-red-600 text-white text-[14px] font-black uppercase tracking-[0.5em] py-4 text-center sticky top-0 z-[100] shadow-2xl animate-pulse border-b-4 border-white">
-        !!! VERSION 6.0 - REFRESHED @ 12:40 AM !!!
-      </div>
       <div className="print:hidden flex flex-col min-h-screen">
         {/* Header */}
       <header className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-b border-stone-200 dark:border-stone-800 sticky top-0 z-50 transition-colors duration-300 w-full">
@@ -2014,9 +2233,12 @@ Good luck in Round ${round + 1}! 🍀`;
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-serif italic tracking-tight dark:text-stone-100">Family and Friends AFL Tipping</h1>
-                <span className="px-1.5 py-0.5 bg-afl-accent text-white text-[8px] font-black uppercase rounded-md shadow-sm">New</span>
+                <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[8px] font-black uppercase rounded-md shadow-sm">v6.0 Live</span>
+                <span className="px-1.5 py-0.5 bg-stone-700 text-stone-300 text-[8px] font-black uppercase rounded-md shadow-sm ml-1">
+                  {typeof window !== 'undefined' && window.location.hostname.includes('-pre-') ? 'Shared Snapshot' : 'Live Dev'}
+                </span>
               </div>
-              <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">2026 Season</p>
+              <p className="text-[10px] text-stone-400 uppercase tracking-widest font-mono">2026 Season • Build 0152</p>
             </div>
           </div>
           
@@ -2123,27 +2345,28 @@ Good luck in Round ${round + 1}! 🍀`;
 
         {/* Sidebar */}
         <aside className={cn(
-          "w-72 bg-afl-navy text-white flex flex-col fixed lg:sticky top-0 lg:top-20 h-screen lg:h-[calc(100vh-5rem)] z-[60] lg:z-40 border-r border-white/10 transition-transform duration-300 ease-in-out",
+          "w-60 bg-afl-navy text-white flex flex-col fixed lg:sticky top-0 lg:top-20 h-screen lg:h-[calc(100vh-5rem)] z-[60] lg:z-40 border-r border-white/10 transition-transform duration-300 ease-in-out",
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}>
-          <div className="lg:hidden p-6 border-b border-white/10 flex items-center justify-between">
+          <div className="lg:hidden p-4 border-b border-white/10 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Trophy className="w-6 h-6 text-afl-accent" />
-              <span className="font-serif italic text-lg">Menu</span>
+              <Trophy className="w-5 h-5 text-afl-accent" />
+              <span className="font-serif italic text-base">Menu</span>
             </div>
             <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-white/10 rounded-xl transition-colors">
-              <X className="w-6 h-6" />
+              <X className="w-5 h-5" />
             </button>
           </div>
 
-          <nav className="flex flex-col gap-2 p-6">
-            <p className="text-[10px] font-bold text-stone-500 uppercase tracking-[0.2em] mb-4 ml-4">Command Center</p>
+          <nav className="flex flex-col gap-1.5 p-4">
+            <p className="text-[10px] font-bold text-stone-500 uppercase tracking-[0.2em] mb-3 ml-3">Command Center</p>
             {[
               { id: 'dashboard', label: 'Overview', icon: LayoutGrid },
               { id: 'war-room', label: 'Tips', icon: Calendar },
               { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
               { id: 'standings', label: 'AFL Ladder', icon: BarChart3 },
               { id: 'results', label: 'Results', icon: CheckCircle2 },
+              { id: 'blog', label: 'News & Strategy', icon: BookOpen },
             ].map((tab) => {
               const hasLiveGames = tab.id === 'war-room' && games.some(g => new Date() > new Date(g.date) && !g.isFinished);
               return (
@@ -2154,7 +2377,7 @@ Good luck in Round ${round + 1}! 🍀`;
                     setIsMobileMenuOpen(false);
                   }}
                   className={cn(
-                    "w-full px-4 py-3.5 rounded-2xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
+                    "w-full px-3 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
                     activeTab === tab.id 
                       ? "text-white shadow-lg" 
                       : "text-stone-400 hover:text-white hover:bg-white/5"
@@ -2183,15 +2406,15 @@ Good luck in Round ${round + 1}! 🍀`;
             
             {profile?.role === 'admin' && (
               <>
-                <div className="h-px bg-white/10 my-4 mx-4" />
-                <p className="text-[10px] font-bold text-stone-500 uppercase tracking-[0.2em] mb-4 ml-4">Administration</p>
+                <div className="h-px bg-white/10 my-3 mx-3" />
+                <p className="text-[10px] font-bold text-stone-500 uppercase tracking-[0.2em] mb-3 ml-3">Administration</p>
                 <button 
                   onClick={() => {
                     setActiveTab('admin');
                     setIsMobileMenuOpen(false);
                   }}
                   className={cn(
-                    "w-full px-4 py-3.5 rounded-2xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
+                    "w-full px-3 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
                     activeTab === 'admin' 
                       ? "text-white shadow-lg" 
                       : "text-stone-400 hover:text-white hover:bg-white/5"
@@ -2208,15 +2431,16 @@ Good luck in Round ${round + 1}! 🍀`;
             )}
           </nav>
           
-          <div className="mt-auto p-6 border-t border-white/5">
-            <div className="bg-white/5 rounded-2xl p-4">
-              <p className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-2">System Status</p>
+          <div className="mt-auto p-4 border-t border-white/5">
+            <div className="bg-white/5 rounded-xl p-3">
+              <p className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-1.5">System Status</p>
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="text-[10px] text-stone-300 font-mono">Cloud Sync Active</span>
                 </div>
-                <span className="text-[8px] text-stone-600 font-mono mt-1">Build: 2026.04.11.0405</span>
+                <span className="text-[8px] text-stone-600 font-mono mt-1">Build: 2026.04.12.0152</span>
+                <span className="text-[8px] text-stone-700 font-mono">Host: {typeof window !== 'undefined' ? window.location.hostname : 'unknown'}</span>
               </div>
             </div>
           </div>
@@ -2315,7 +2539,7 @@ Good luck in Round ${round + 1}! 🍀`;
                     onClick={() => setActiveTab('war-room')}
                     className="mt-8 w-full py-4 bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-800 dark:hover:bg-white transition-all flex items-center justify-center gap-2 group"
                   >
-                    Go to War Room <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                    Enter Your Tips <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </button>
                 </div>
               </motion.div>
@@ -2507,7 +2731,20 @@ Good luck in Round ${round + 1}! 🍀`;
               </div>
             )}
             {/* Main Game Cards */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
+            <motion.div 
+              initial="hidden"
+              animate="show"
+              variants={{
+                hidden: { opacity: 0 },
+                show: {
+                  opacity: 1,
+                  transition: {
+                    staggerChildren: 0.1
+                  }
+                }
+              }}
+              className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6"
+            >
               {roundGames.map(game => {
                 const gameTip = warRoomTips.find(t => t.gameId === game.id);
                 const isLocked = new Date() > new Date(game.date);
@@ -2522,8 +2759,10 @@ Good luck in Round ${round + 1}! 🍀`;
                     layout
                     key={game.id} 
                     id={`game-${game.id}`}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
+                    variants={{
+                      hidden: { opacity: 0, y: 20 },
+                      show: { opacity: 1, y: 0 }
+                    }}
                     whileHover={{ y: -4 }}
                     className={cn(
                       "relative bg-afl-navy text-white rounded-3xl border border-white overflow-hidden shadow-sm transition-all cursor-pointer",
@@ -2538,6 +2777,78 @@ Good luck in Round ${round + 1}! 🍀`;
                     onMouseLeave={() => setHoveredGameId(null)}
                     onClick={() => setExpandedGameId(isExpanded ? null : game.id)}
                   >
+                    {/* Team Specific Gradient Background */}
+                    <div className={cn(
+                      "absolute inset-0 opacity-10 pointer-events-none bg-gradient-to-br",
+                      TEAM_GRADIENTS[game.hometeam.split(' ')[0]] || TEAM_GRADIENTS[game.hometeam] || "from-stone-800 to-stone-900"
+                    )} />
+                    
+                    {/* Stadium Grass Texture */}
+                    <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-field-grass" />
+
+                    {/* Hover Details Tooltip */}
+                    <AnimatePresence>
+                      {hoveredGameId === game.id && !isExpanded && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 z-[60] pointer-events-none"
+                        >
+                          <div className="bg-stone-900/95 backdrop-blur-xl border border-white/20 rounded-2xl p-4 shadow-2xl min-w-[240px]">
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2 pb-2 border-b border-white/10">
+                                <Trophy className="w-4 h-4 text-afl-gold" />
+                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Match Details</span>
+                              </div>
+                              
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center">
+                                    <MapPin className="w-4 h-4 text-afl-accent" />
+                                  </div>
+                                  <div>
+                                    <p className="text-[8px] text-stone-400 uppercase font-bold tracking-tighter">Venue</p>
+                                    <p className="text-xs font-bold text-white">{game.venue}</p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center">
+                                    <Clock className="w-4 h-4 text-afl-accent" />
+                                  </div>
+                                  <div>
+                                    <p className="text-[8px] text-stone-400 uppercase font-bold tracking-tighter">Kick-off (AWST)</p>
+                                    <p className="text-xs font-bold text-white">
+                                      {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'h:mm a')}
+                                    </p>
+                                    <p className="text-[9px] text-stone-500">
+                                      {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEEE, d MMM')}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {isFinished && (
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                                    </div>
+                                    <div>
+                                      <p className="text-[8px] text-stone-400 uppercase font-bold tracking-tighter">Final Result</p>
+                                      <p className="text-xs font-bold text-white">{game.hscore} - {game.ascore}</p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            
+                            {/* Tooltip Arrow */}
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 w-4 h-4 bg-stone-900/95 border-r border-b border-white/20 rotate-45 -mt-2" />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
                     {/* Team Color Accent Background */}
                     <div 
                       className="absolute inset-0 pointer-events-none transition-opacity duration-500 opacity-0"
@@ -2721,10 +3032,20 @@ Good luck in Round ${round + 1}! 🍀`;
                                 initial={{ opacity: 0, scale: 0.9, y: 10 }}
                                 animate={{ opacity: 1, scale: 1, y: 0 }}
                                 exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                                className="w-full max-w-[180px] p-3 rounded-3xl bg-afl-gold/5 border border-afl-gold/20 relative group/margin shadow-sm"
+                                className="w-full max-w-[180px] p-4 rounded-3xl bg-afl-gold/10 border-2 border-afl-gold/30 relative group/margin shadow-md"
                               >
-                                <label className="block text-[10px] text-center uppercase font-black text-stone-400 mb-2 tracking-widest">
+                                <label className="block text-[11px] text-center uppercase font-black text-stone-500 mb-3 tracking-widest flex items-center justify-center gap-1 group/label">
                                   {isFinished ? 'Actual Margin' : 'Winning Margin'}
+                                  {!isFinished && (
+                                    <div className="relative">
+                                      <Info className="w-3.5 h-3.5 text-stone-500 hover:text-afl-gold cursor-help transition-colors" />
+                                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-stone-800 text-[9px] text-white rounded-lg opacity-0 group-hover/label:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl border border-white/10 normal-case font-medium">
+                                        <p className="font-bold text-afl-gold mb-1">Bonus Point System:</p>
+                                        <p>Get the margin exactly right for 1 bonus point!</p>
+                                        <p className="mt-1 text-stone-400 italic">Example: Tip 12 pts, result is 12 pts = +1 bonus pt.</p>
+                                      </div>
+                                    </div>
+                                  )}
                                 </label>
                                 <div className="flex items-center gap-2">
                                   {!isFinished && (
@@ -2734,7 +3055,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                         const current = gameTip?.margin || 0;
                                         stageTip(game.id, game.round, gameTip?.selectedTeam || '', Math.max(0, current - 10));
                                       }}
-                                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
+                                      className="w-9 h-9 flex items-center justify-center rounded-xl bg-white dark:bg-stone-800 text-stone-600 hover:text-afl-accent transition-all text-[11px] font-black shadow-sm hover:shadow-md active:scale-90"
                                       title="Decrease by 10"
                                     >
                                       -10
@@ -2752,7 +3073,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                         const val = parseInt(valStr);
                                         stageTip(game.id, game.round, gameTip?.selectedTeam || '', isNaN(val) ? 0 : (val as number));
                                       }}
-                                      className="w-full text-center py-1 border-b-2 border-afl-gold/30 focus:border-afl-gold outline-none font-mono text-3xl font-black bg-transparent dark:text-stone-100 transition-all disabled:opacity-50"
+                                      className="w-full text-center py-1 border-b-2 border-afl-gold/50 focus:border-afl-gold outline-none font-mono text-[14px] font-black bg-transparent dark:text-stone-100 transition-all disabled:opacity-50"
                                     />
                                   </div>
                                   {!isFinished && (
@@ -2762,7 +3083,7 @@ Good luck in Round ${round + 1}! 🍀`;
                                         const current = gameTip?.margin || 0;
                                         stageTip(game.id, game.round, gameTip?.selectedTeam || '', current + 10);
                                       }}
-                                      className="w-8 h-8 flex items-center justify-center rounded-xl bg-white dark:bg-stone-800 text-stone-500 hover:text-afl-accent transition-all text-[10px] font-black shadow-sm hover:shadow-md active:scale-90"
+                                      className="w-9 h-9 flex items-center justify-center rounded-xl bg-white dark:bg-stone-800 text-stone-600 hover:text-afl-accent transition-all text-[11px] font-black shadow-sm hover:shadow-md active:scale-90"
                                       title="Increase by 10"
                                     >
                                       +10
@@ -2878,7 +3199,8 @@ Good luck in Round ${round + 1}! 🍀`;
                           className="overflow-hidden"
                         >
                           <div className="px-6 py-6 bg-stone-50 dark:bg-stone-900/50 border-t border-stone-100 dark:border-stone-800">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                            <AIScout game={game} standings={standings} />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-6">
                               <div className="space-y-1">
                                 <p className="text-[10px] text-stone-400 uppercase font-bold tracking-wider">Game Status</p>
                                 <p className="text-sm font-medium dark:text-stone-200">
@@ -2950,7 +3272,7 @@ Good luck in Round ${round + 1}! 🍀`;
                   </motion.div>
                 );
               })}
-            </div>
+            </motion.div>
           </div>
         )}
 
@@ -2985,6 +3307,7 @@ Good luck in Round ${round + 1}! 🍀`;
                         Margin Error {leaderboardSort.key === 'marginError' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
+                    <th className="px-8 py-4 font-medium text-center">Form</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3009,7 +3332,18 @@ Good luck in Round ${round + 1}! 🍀`;
                                 style={{ backgroundColor: AFL_TEAM_COLORS[u.favoriteTeam] }}
                               />
                             )}
-                            {u.rank < 10 ? `0${u.rank}` : u.rank}
+                            <div className="flex items-center gap-2">
+                              <span>{u.rank < 10 ? `0${u.rank}` : u.rank}</span>
+                              {u.prevRank && u.prevRank !== u.rank && (
+                                <div className={cn(
+                                  "flex items-center text-[10px] font-bold",
+                                  u.prevRank > u.rank ? "text-emerald-500" : "text-rose-500"
+                                )}>
+                                  {u.prevRank > u.rank ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                  {Math.abs(u.prevRank - u.rank)}
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td className="px-8 py-6">
                             <div className="flex items-center gap-3">
@@ -3054,6 +3388,21 @@ Good luck in Round ${round + 1}! 🍀`;
                           </td>
                           <td className="px-8 py-6 text-center">
                             <span className="text-lg font-mono text-stone-500 dark:text-stone-400">{u.calculatedMargin}</span>
+                          </td>
+                          <td className="px-8 py-6">
+                            <div className="flex items-center justify-center gap-1">
+                              {u.form?.map((result, idx) => (
+                                <div 
+                                  key={idx}
+                                  className={cn(
+                                    "w-5 h-5 rounded flex items-center justify-center text-[10px] font-black text-white",
+                                    result === 'W' ? "bg-emerald-500" : "bg-stone-300 dark:bg-stone-700"
+                                  )}
+                                >
+                                  {result}
+                                </div>
+                              ))}
+                            </div>
                           </td>
                         </tr>
                         {isExpanded && (
@@ -3811,6 +4160,73 @@ Good luck in Round ${round + 1}! 🍀`;
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    {/* Round-by-Round Summary */}
+                    <div className="lg:col-span-3 space-y-6">
+                      <div className="flex items-center gap-3">
+                        <BarChart3 className="w-5 h-5 text-afl-accent" />
+                        <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">Round-by-Round Performance</h3>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {(() => {
+                          const roundsList = Array.from(new Set(games.map(g => g.round))).sort((a: any, b: any) => b - a);
+                          return roundsList.map(r => {
+                            const roundGames = games.filter(g => g.round === r);
+                            const finishedRoundGames = roundGames.filter(g => g.isFinished);
+                            const roundTips = userTips.filter(t => t.round === r);
+                            
+                            let roundCorrect = 0;
+                            let roundPoints = 0;
+                            let roundMarginErr = 0;
+                            
+                            finishedRoundGames.forEach(game => {
+                              const tip = roundTips.find(t => t.gameId === game.id);
+                              if (tip) {
+                                const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+                                if (game.winner === tip.selectedTeam) {
+                                  roundCorrect += 1;
+                                  roundPoints += 1;
+                                  if (game.isFirstInRound && tip.margin !== undefined) {
+                                    if (tip.margin === actualMargin) roundPoints += 1;
+                                    roundMarginErr += Math.abs(tip.margin - actualMargin);
+                                  }
+                                } else if (game.isFirstInRound && tip.margin !== undefined) {
+                                  roundMarginErr += Math.abs(tip.margin - actualMargin);
+                                }
+                              }
+                            });
+
+                            if (roundTips.length === 0 && finishedRoundGames.length === 0) return null;
+
+                            return (
+                              <div key={r} className="bg-white dark:bg-stone-900 p-5 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm hover:shadow-md transition-all">
+                                <div className="flex justify-between items-start mb-4">
+                                  <h4 className="text-xs font-black text-stone-900 dark:text-stone-100 uppercase tracking-widest">Round {r}</h4>
+                                  <span className="text-[10px] font-mono text-stone-400">{roundTips.length}/{roundGames.length} Tips</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <p className="text-[8px] font-bold text-stone-400 uppercase mb-1">Correct</p>
+                                    <p className="text-xl font-serif font-bold text-stone-900 dark:text-stone-100">{roundCorrect}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[8px] font-bold text-stone-400 uppercase mb-1">Points</p>
+                                    <p className="text-xl font-serif font-bold text-afl-accent">{roundPoints}</p>
+                                  </div>
+                                </div>
+                                {finishedRoundGames.some(g => g.isFirstInRound) && (
+                                  <div className="mt-3 pt-3 border-t border-stone-100 dark:border-stone-800">
+                                    <p className="text-[8px] font-bold text-stone-400 uppercase mb-1">Margin Error</p>
+                                    <p className="text-sm font-mono font-bold text-stone-600 dark:text-stone-400">{roundMarginErr} pts</p>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }).filter(Boolean);
+                        })()}
+                      </div>
+                    </div>
+
                     {/* Recent Performance */}
                     <div className="lg:col-span-1 space-y-6">
                       <div className="flex items-center gap-3">
@@ -4462,6 +4878,16 @@ Good luck in Round ${round + 1}! 🍀`;
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'blog' && (
+          <BlogPage 
+            posts={BLOG_POSTS} 
+            onNavigate={(tab) => {
+              setActiveTab(tab);
+              window.scrollTo(0, 0);
+            }}
+          />
         )}
           </main>
 

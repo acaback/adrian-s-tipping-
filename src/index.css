@@ -3,10 +3,10 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --color-afl-navy: #001D49;
+  --color-afl-navy: #064e3b; /* Deep Forest Green */
   --color-afl-red: #E21E31;
   --color-afl-gold: #FFB800;
-  --color-afl-accent: #008AAB; /* A nice teal/cyan from Port Adelaide/AFL style */
+  --color-afl-accent: #10b981; /* Vibrant Emerald Green */
   
   --color-stone-950: #2d2a28;
   --color-stone-900: #3f3c3a;
@@ -33,6 +33,26 @@
   
   .mask-fade-right {
     mask-image: linear-gradient(to right, black 80%, transparent 100%);
+  }
+
+  .bg-field-grass {
+    background-image: radial-gradient(#ffffff05 1px, transparent 1px), linear-gradient(to right, #ffffff02 1px, transparent 1px);
+    background-size: 20px 20px, 40px 40px;
+  }
+
+  .bg-stadium-grid {
+    background-image: linear-gradient(rgba(16, 185, 129, 0.05) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(16, 185, 129, 0.05) 1px, transparent 1px);
+    background-size: 50px 50px;
+  }
+
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.05); }
+  }
+
+  .animate-pulse-soft {
+    animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 
   .custom-scrollbar::-webkit-scrollbar {

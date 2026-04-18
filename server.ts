@@ -19,12 +19,26 @@ async function startServer() {
     console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
     console.log(`Current Time: ${new Date().toISOString()}`);
 
-    // Add a custom header to help verify deployment
+    // Request logging with status code
     app.use((req, res, next) => {
-      res.setHeader('X-App-Version', `2026.04.11.0739-${Math.random().toString(36).substring(7)}`);
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
+      const start = Date.now();
+      res.on('finish', () => {
+        const duration = Date.now() - start;
+        console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode} ${duration}ms`);
+      });
+      next();
+    });
+
+    // Add a custom header and handle caching
+    app.use((req, res, next) => {
+      res.setHeader('X-App-Version', `2026.04.14.0113-${Math.random().toString(36).substring(7)}`);
+      
+      // Only apply strict no-cache to HTML and API requests
+      if (req.url === '/' || req.url.includes('.html') || req.url.startsWith('/api/')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
       next();
     });
 
@@ -237,6 +251,12 @@ async function startServer() {
         console.log("Returning hardcoded fallback teams");
         res.json({ ...FALLBACK_TEAMS, source: 'fallback' });
       }
+    });
+
+    // API 404 handler - catch all other /api/* requests
+    app.all("/api/*", (req, res) => {
+      console.warn(`API 404: ${req.method} ${req.url}`);
+      res.status(404).json({ error: "API route not found" });
     });
 
     // Vite middleware for development
