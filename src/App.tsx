@@ -72,7 +72,8 @@ import {
   Loader2,
   Printer,
   Menu,
-  Info
+  Info,
+  ExternalLink
 } from 'lucide-react';
 import { format, isAfter, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -714,11 +715,17 @@ function AppContent() {
       let points = 0;
       let marginError = 0;
 
+      // Draw points - Every player gets 1 point for every finished draw in the round
+      const drawnGamesInRound = roundGames.filter(g => g.hscore !== null && g.ascore !== null && g.hscore === g.ascore);
+      points += drawnGamesInRound.length;
+
       userTips.forEach(tip => {
         const game = roundGames.find(g => g.id === tip.gameId);
         if (game) {
           const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
-          if (game.winner === tip.selectedTeam) {
+          const isDraw = game.hscore === game.ascore;
+
+          if (!isDraw && game.winner === tip.selectedTeam) {
             correct += 1;
             points += 1;
             if (game.isFirstInRound && tip.margin !== undefined) {
@@ -735,6 +742,9 @@ function AppContent() {
     }).sort((a, b) => b.points - a.points || a.marginError - b.marginError);
 
     const winners = roundGames.map(g => {
+      if (g.hscore === g.ascore) {
+        return `• ${g.hometeam} (${g.hscore}) drew with ${g.awayteam} (${g.ascore})`;
+      }
       const winnerName = g.winner === g.hometeam ? g.hometeam : g.awayteam;
       const winnerScore = g.winner === g.hometeam ? g.hscore : g.ascore;
       const loserName = g.winner === g.hometeam ? g.awayteam : g.hometeam;
@@ -1452,12 +1462,18 @@ Good luck in Round ${round + 1}! 🍀`;
       let points = 0;
       let marginError = 0;
 
+      // Draw points - Every player gets 1 point for every finished draw in the season
+      const drawnGamesCount = games.filter(g => g.isFinished && g.hscore !== null && g.ascore !== null && g.hscore === g.ascore).length;
+      points += drawnGamesCount;
+
       userTips.forEach(tip => {
         const game = games.find(g => g.id === tip.gameId);
         if (game && game.isFinished) {
           const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+          const isDraw = game.hscore === game.ascore;
+
           // Correct tip
-          if (game.winner === tip.selectedTeam) {
+          if (!isDraw && game.winner === tip.selectedTeam) {
             points += 1;
             
             // Bonus point for margin on first game
@@ -1481,6 +1497,7 @@ Good luck in Round ${round + 1}! 🍀`;
       
       const form = finishedGamesWithTips.map(game => {
         const tip = userTips.find(t => t.gameId === game.id);
+        if (game.hscore === game.ascore) return 'D';
         if (!tip) return 'L'; // No tip counts as a loss
         return game.winner === tip.selectedTeam ? 'W' : 'L';
       }).reverse();
@@ -1555,11 +1572,17 @@ Good luck in Round ${round + 1}! 🍀`;
       let points = 0;
       let marginError = 0;
 
+      // Draw points - Every player gets 1 point for every finished draw in the selected round
+      const drawnGamesInRound = games.filter(g => g.round === resultsSelectedRound && g.isFinished && g.hscore !== null && g.ascore !== null && g.hscore === g.ascore);
+      points += drawnGamesInRound.length;
+
       userTips.forEach(tip => {
         const game = games.find(g => g.id === tip.gameId);
         if (game && game.isFinished) {
           const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
-          if (game.winner === tip.selectedTeam) {
+          const isDraw = game.hscore === game.ascore;
+
+          if (!isDraw && game.winner === tip.selectedTeam) {
             correct += 1;
             points += 1;
             if (game.isFirstInRound && tip.margin !== undefined) {
@@ -2429,6 +2452,19 @@ Good luck in Round ${round + 1}! 🍀`;
                 </button>
               </>
             )}
+            
+            <div className="mt-8 pt-4 border-t border-white/5 space-y-2">
+              <p className="text-[9px] font-bold text-stone-600 uppercase tracking-[0.2em] mb-1 ml-3">Support</p>
+              <a 
+                href="https://your-website.com" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="w-full px-3 py-2.5 rounded-xl text-[11px] font-bold text-stone-500 hover:text-white hover:bg-white/5 transition-all flex items-center gap-3 group"
+              >
+                <ExternalLink className="w-4 h-4 text-stone-600 group-hover:text-afl-accent" />
+                Visit My Website
+              </a>
+            </div>
           </nav>
           
           <div className="mt-auto p-4 border-t border-white/5">
@@ -4750,7 +4786,7 @@ Good luck in Round ${round + 1}! 🍀`;
                     apiStatus.firestore === 'success' ? "bg-emerald-500" : "bg-red-500"
                   )}></div>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">
-                    {apiStatus.firestore === 'success' ? "Cloud Connected" : "Connection Error"}
+                    {apiStatus.firestore === 'success' ? "Database Connected" : "Connection Error"}
                   </span>
                 </div>
               </div>
@@ -4896,7 +4932,18 @@ Good luck in Round ${round + 1}! 🍀`;
             <div className="flex flex-col md:flex-row items-center justify-between gap-6">
               <div className="text-center md:text-left">
                 <p className="text-sm font-serif italic font-bold">Family and Friends AFL Tipping</p>
-                <p className="text-[10px] text-stone-400 uppercase tracking-widest mt-1">Built for the 2026 AFL Season</p>
+                <div className="flex flex-col sm:flex-row items-center md:items-start gap-1 sm:gap-4 mt-1">
+                  <p className="text-[10px] text-stone-400 uppercase tracking-widest">Built for the 2026 AFL Season</p>
+                  <span className="hidden sm:inline text-stone-300">•</span>
+                  <a 
+                    href="https://your-website.com" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-[10px] font-bold text-afl-navy dark:text-afl-accent hover:underline uppercase tracking-widest transition-all"
+                  >
+                    Visit My Website
+                  </a>
+                </div>
               </div>
               <div className="flex items-center gap-6">
                 <div className="flex items-center gap-2 text-[10px] font-bold text-stone-400 uppercase tracking-widest">
