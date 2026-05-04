@@ -471,151 +471,6 @@ interface StandingsItem {
   percentage: number;
 }
 
-function WarRoomPopup({ 
-  isOpen, 
-  onClose, 
-  leader, 
-  lastPlace, 
-  nextGame
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
-  leader: LeaderboardItem | undefined;
-  lastPlace: LeaderboardItem | undefined;
-  nextGame: Game | undefined;
-}) {
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-xl">
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0, y: 20 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        className="bg-stone-900 w-full max-w-2xl rounded-[2.5rem] shadow-[0_0_100px_rgba(0,0,0,0.5)] border border-white/10 overflow-hidden relative"
-      >
-        {/* Decorative Background Elements */}
-        <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-afl-gold/10 to-transparent pointer-events-none" />
-        <div className="absolute -top-24 -right-24 w-64 h-64 bg-afl-gold/5 rounded-full blur-3xl pointer-events-none" />
-        
-        <div className="p-8 md:p-12 relative z-10">
-          <div className="flex items-center justify-between mb-10">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-afl-gold flex items-center justify-center shadow-[0_0_20px_rgba(255,191,0,0.3)]">
-                <ShieldAlert className="w-7 h-7 text-stone-900" />
-              </div>
-              <div>
-                <h2 className="text-3xl font-serif italic text-white">War Room Briefing</h2>
-                <p className="text-[10px] text-afl-gold uppercase tracking-[0.4em] font-black">Tactical Intelligence Report</p>
-              </div>
-            </div>
-            <button 
-              onClick={onClose}
-              className="p-3 hover:bg-white/5 rounded-2xl transition-colors group"
-            >
-              <X className="w-6 h-6 text-stone-500 group-hover:text-white" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Leader Section */}
-            <div className="bg-white/5 border border-white/10 rounded-[2rem] p-6 relative overflow-hidden group hover:border-afl-gold/30 transition-all">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                <Trophy className="w-16 h-16 text-afl-gold" />
-              </div>
-              <p className="text-[10px] text-afl-gold uppercase tracking-widest font-black mb-4">Competition Leader</p>
-              {leader ? (
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-stone-800 flex items-center justify-center border border-white/5 text-2xl font-serif italic text-afl-gold">
-                    {leader.displayName[0]}
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-white mb-1">{leader.displayName}</h3>
-                    <div className="flex items-center gap-3">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] text-stone-500 uppercase font-bold">Points</span>
-                        <span className="text-lg font-black text-white leading-none">{leader.calculatedPoints}</span>
-                      </div>
-                      <div className="w-px h-6 bg-white/10" />
-                      <div className="flex flex-col">
-                        <span className="text-[10px] text-stone-500 uppercase font-bold">Margin</span>
-                        <span className="text-lg font-black text-stone-300 leading-none">{leader.calculatedMargin}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-stone-500 italic">No leader data available</p>
-              )}
-            </div>
-
-            {/* Last Place Section */}
-            <div className="bg-white/5 border border-white/10 rounded-[2rem] p-6 relative overflow-hidden group hover:border-red-500/30 transition-all">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                <Zap className="w-16 h-16 text-red-500" />
-              </div>
-              <p className="text-[10px] text-red-500 uppercase tracking-widest font-black mb-4">Wooden Spoon Alert</p>
-              {lastPlace ? (
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-stone-800 flex items-center justify-center border border-white/5 text-2xl font-serif italic text-stone-500">
-                    {lastPlace.displayName[0]}
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-white mb-1">{lastPlace.displayName}</h3>
-                    <p className="text-xs text-stone-500 font-medium">Currently trailing the pack</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-stone-500 italic">No data available</p>
-              )}
-            </div>
-
-            {/* Next Game Section */}
-            <div className="md:col-span-2 bg-afl-navy/50 border border-white/10 rounded-[2rem] p-8 relative overflow-hidden group hover:border-white/20 transition-all">
-              <div className="absolute top-0 right-0 p-6 opacity-5">
-                <Calendar className="w-32 h-32 text-white" />
-              </div>
-              <p className="text-[10px] text-stone-400 uppercase tracking-widest font-black mb-6">Next Tactical Engagement</p>
-              {nextGame ? (
-                <div className="flex flex-col md:flex-row items-center justify-between gap-8">
-                  <div className="flex items-center gap-8 w-full md:w-auto justify-center">
-                    <div className="flex flex-col items-center gap-3">
-                      <span className="text-xs font-black text-white uppercase tracking-tighter">{nextGame.hometeam}</span>
-                    </div>
-                    <div className="flex flex-col items-center">
-                      <span className="text-2xl font-serif italic text-afl-gold">VS</span>
-                      <span className="text-[10px] text-stone-500 font-bold uppercase mt-2">
-                        {formatInTimeZone(parseISO(nextGame.date), AWST_TIMEZONE, 'EEE h:mm a')}
-                      </span>
-                    </div>
-                    <div className="flex flex-col items-center gap-3">
-                      <span className="text-xs font-black text-white uppercase tracking-tighter">{nextGame.awayteam}</span>
-                    </div>
-                  </div>
-                  <div className="text-center md:text-right">
-                    <p className="text-sm font-serif italic text-stone-300 mb-1">{nextGame.venue}</p>
-                    <p className="text-[10px] text-stone-500 uppercase font-bold tracking-widest">Round {nextGame.round}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-stone-500 italic">No upcoming games scheduled</p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-10">
-            <button 
-              onClick={onClose}
-              className="w-full py-5 bg-afl-gold text-stone-900 rounded-2xl font-black text-sm uppercase tracking-[0.2em] shadow-[0_10px_30px_rgba(255,191,0,0.2)] hover:shadow-[0_15px_40px_rgba(255,191,0,0.3)] hover:-translate-y-0.5 transition-all active:translate-y-0"
-            >
-              Acknowledge & Enter
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
 function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -635,8 +490,6 @@ function AppContent() {
   const [error, setError] = useState<string | null>(null);
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<string>('');
   const [adminSelectedRound, setAdminSelectedRound] = useState<number>(currentRound);
-  const [showWarRoomPopup, setShowWarRoomPopup] = useState(false);
-  const [hasShownWarRoom, setHasShownWarRoom] = useState(false);
   const [warRoomUserId, setWarRoomUserId] = useState<string>('');
   const [resultsUserId, setResultsUserId] = useState<string>('');
   const [resultsSubTab, setResultsSubTab] = useState<'individual' | 'round-summary'>('individual');
@@ -719,21 +572,30 @@ function AppContent() {
       const drawnGamesInRound = roundGames.filter(g => g.hscore !== null && g.ascore !== null && g.hscore === g.ascore);
       points += drawnGamesInRound.length;
 
-      userTips.forEach(tip => {
-        const game = roundGames.find(g => g.id === tip.gameId);
+      roundGames.forEach(game => {
+        const tip = userTips.find(t => t.gameId === game.id);
         if (game) {
           const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
           const isDraw = game.hscore === game.ascore;
 
-          if (!isDraw && game.winner === tip.selectedTeam) {
-            correct += 1;
-            points += 1;
-            if (game.isFirstInRound && tip.margin !== undefined) {
-              if (tip.margin === actualMargin) points += 1;
+          if (isDraw) return;
+
+          if (tip) {
+            if (game.winner === tip.selectedTeam) {
+              correct += 1;
+              points += 1;
+              if (game.isFirstInRound && tip.margin !== undefined) {
+                if (tip.margin === actualMargin) points += 1;
+                marginError += Math.abs(tip.margin - actualMargin);
+              }
+            } else if (game.isFirstInRound && tip.margin !== undefined) {
               marginError += Math.abs(tip.margin - actualMargin);
             }
-          } else if (game.isFirstInRound && tip.margin !== undefined) {
-            marginError += Math.abs(tip.margin - actualMargin);
+          } else if (game.isFinished) {
+            // Missing tip: Point for away team win
+            if (game.winner === game.awayteam) {
+              points += 1;
+            }
           }
         }
       });
@@ -847,10 +709,6 @@ Good luck in Round ${round + 1}! 🍀`;
         await syncUserProfile(firebaseUser);
         setWarRoomUserId(firebaseUser.uid);
         setResultsUserId(firebaseUser.uid);
-        if (!hasShownWarRoom) {
-          setShowWarRoomPopup(true);
-          setHasShownWarRoom(true);
-        }
       } else {
         setProfile(null);
         setWarRoomUserId('');
@@ -1466,14 +1324,16 @@ Good luck in Round ${round + 1}! 🍀`;
       const drawnGamesCount = games.filter(g => g.isFinished && g.hscore !== null && g.ascore !== null && g.hscore === g.ascore).length;
       points += drawnGamesCount;
 
-      userTips.forEach(tip => {
-        const game = games.find(g => g.id === tip.gameId);
-        if (game && game.isFinished) {
-          const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
-          const isDraw = game.hscore === game.ascore;
+      games.filter(g => g.isFinished).forEach(game => {
+        const tip = userTips.find(t => t.gameId === game.id);
+        const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+        const isDraw = game.hscore === game.ascore;
 
+        if (isDraw) return;
+
+        if (tip) {
           // Correct tip
-          if (!isDraw && game.winner === tip.selectedTeam) {
+          if (game.winner === tip.selectedTeam) {
             points += 1;
             
             // Bonus point for margin on first game
@@ -1485,6 +1345,11 @@ Good luck in Round ${round + 1}! 🍀`;
             }
           } else if (game.isFirstInRound && tip.margin !== undefined) {
             marginError += Math.abs(tip.margin - actualMargin);
+          }
+        } else {
+          // Missing tip: Point for away team win
+          if (game.winner === game.awayteam) {
+            points += 1;
           }
         }
       });
@@ -1498,7 +1363,10 @@ Good luck in Round ${round + 1}! 🍀`;
       const form = finishedGamesWithTips.map(game => {
         const tip = userTips.find(t => t.gameId === game.id);
         if (game.hscore === game.ascore) return 'D';
-        if (!tip) return 'L'; // No tip counts as a loss
+        if (!tip) {
+          // No tip: Win if away team won
+          return game.winner === game.awayteam ? 'W' : 'L';
+        }
         return game.winner === tip.selectedTeam ? 'W' : 'L';
       }).reverse();
 
@@ -1576,13 +1444,15 @@ Good luck in Round ${round + 1}! 🍀`;
       const drawnGamesInRound = games.filter(g => g.round === resultsSelectedRound && g.isFinished && g.hscore !== null && g.ascore !== null && g.hscore === g.ascore);
       points += drawnGamesInRound.length;
 
-      userTips.forEach(tip => {
-        const game = games.find(g => g.id === tip.gameId);
-        if (game && game.isFinished) {
-          const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
-          const isDraw = game.hscore === game.ascore;
+      games.filter(g => g.round === resultsSelectedRound && g.isFinished).forEach(game => {
+        const tip = userTips.find(t => t.gameId === game.id);
+        const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+        const isDraw = game.hscore === game.ascore;
 
-          if (!isDraw && game.winner === tip.selectedTeam) {
+        if (isDraw) return;
+
+        if (tip) {
+          if (game.winner === tip.selectedTeam) {
             correct += 1;
             points += 1;
             if (game.isFirstInRound && tip.margin !== undefined) {
@@ -1591,6 +1461,11 @@ Good luck in Round ${round + 1}! 🍀`;
             }
           } else if (game.isFirstInRound && tip.margin !== undefined) {
             marginError += Math.abs(tip.margin - actualMargin);
+          }
+        } else {
+          // Missing tip: Point for away team win
+          if (game.winner === game.awayteam) {
+            points += 1;
           }
         }
       });
@@ -1668,8 +1543,11 @@ Good luck in Round ${round + 1}! 🍀`;
       
       finishedRoundGames.forEach(game => {
         const tip = roundTips.find(t => t.gameId === game.id);
+        const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+        
+        if (game.hscore === game.ascore) return;
+
         if (tip) {
-          const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
           if (game.winner === tip.selectedTeam) {
             correct += 1;
             points += 1;
@@ -1679,6 +1557,11 @@ Good luck in Round ${round + 1}! 🍀`;
             }
           } else if (game.isFirstInRound && tip.margin !== undefined) {
             marginError += Math.abs(tip.margin - actualMargin);
+          }
+        } else {
+          // Missing tip: Point for away team win
+          if (game.winner === game.awayteam) {
+            points += 1;
           }
         }
       });
@@ -4023,10 +3906,14 @@ Good luck in Round ${round + 1}! 🍀`;
               let marginError = 0;
               let correctTips = 0;
               
-              userTips.forEach(tip => {
-                const game = games.find(g => g.id === tip.gameId);
-                if (game && game.isFinished) {
-                  const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+              finishedGames.forEach(game => {
+                const tip = userTips.find(t => t.gameId === game.id);
+                const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+                const isDraw = game.hscore === game.ascore;
+
+                if (isDraw) return;
+
+                if (tip) {
                   if (game.winner === tip.selectedTeam) {
                     points += 1;
                     correctTips += 1;
@@ -4036,6 +3923,12 @@ Good luck in Round ${round + 1}! 🍀`;
                     }
                   } else if (game.isFirstInRound && tip.margin !== undefined) {
                     marginError += Math.abs(tip.margin - actualMargin);
+                  }
+                } else {
+                  // Missing tip: Point for away team win
+                  if (game.winner === game.awayteam) {
+                    points += 1;
+                    correctTips += 1;
                   }
                 }
               });
@@ -4047,7 +3940,8 @@ Good luck in Round ${round + 1}! 🍀`;
               const recentGames = [...finishedGames].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5);
               const recentTips = recentGames.map(g => {
                 const tip = userTips.find(t => t.gameId === g.id);
-                return { game: g, tip, isCorrect: tip && g.winner === tip.selectedTeam };
+                const isCorrect = tip ? g.winner === tip.selectedTeam : g.winner === g.awayteam;
+                return { game: g, tip, isCorrect };
               });
 
               return (
@@ -5228,13 +5122,6 @@ Good luck in Round ${round + 1}! 🍀`;
         )}
       </AnimatePresence>
 
-      <WarRoomPopup 
-        isOpen={showWarRoomPopup}
-        onClose={() => setShowWarRoomPopup(false)}
-        leader={leader}
-        lastPlace={lastPlace}
-        nextGame={nextGame}
-      />
       </div>
 
       {/* Hidden Print Section */}
