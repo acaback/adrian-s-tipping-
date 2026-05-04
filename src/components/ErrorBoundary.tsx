@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -42,16 +41,20 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
       let errorMessage = "Something went wrong.";
       let details = "";
 
-      try {
-        // Check if the error message is a JSON string from handleFirestoreError
-        const parsedError = JSON.parse(error?.message || "");
-        if (parsedError.error && parsedError.operationType) {
-          errorMessage = `Database Error: ${parsedError.operationType.toUpperCase()} failed.`;
-          details = parsedError.error;
+      if (error && error.message) {
+        try {
+          // Check if the error message is a JSON string from handleFirestoreError
+          const parsedError = JSON.parse(error.message);
+          if (parsedError && typeof parsedError === 'object' && parsedError.error && parsedError.operationType) {
+            errorMessage = `Database Error: ${String(parsedError.operationType).toUpperCase()} failed.`;
+            details = String(parsedError.error);
+          } else {
+             errorMessage = error.message;
+          }
+        } catch (e) {
+          // Not a JSON error, use the standard error message
+          errorMessage = error.message;
         }
-      } catch (e) {
-        // Not a JSON error, use the standard error message
-        errorMessage = error?.message || errorMessage;
       }
 
       return (
@@ -68,13 +71,13 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
             </div>
             
             <div className="bg-stone-50 dark:bg-stone-800/50 p-4 rounded-2xl mb-6 border border-stone-200 dark:border-stone-700">
-              <p className="text-stone-800 dark:text-stone-200 font-medium mb-1">{errorMessage}</p>
-              {details && <p className="text-stone-500 dark:text-stone-400 text-xs font-mono break-all">{details}</p>}
+              <p className="text-stone-800 dark:text-stone-200 font-medium mb-1 line-clamp-2">{errorMessage}</p>
+              {details && <p className="text-stone-500 dark:text-stone-400 text-xs font-mono break-all line-clamp-3">{details}</p>}
             </div>
 
             <button
               onClick={() => window.location.reload()}
-              className="w-full py-4 bg-afl-navy text-white rounded-2xl font-bold hover:bg-afl-navy/90 transition-all shadow-lg shadow-afl-navy/20"
+              className="w-full py-4 bg-[#064e3b] text-white rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg"
             >
               Reload Application
             </button>

@@ -555,8 +555,7 @@ function AppContent() {
 
   const generateRoundRecap = (round: number) => {
     const roundGames = games.filter(g => g.round === round && g.isFinished);
-    if (roundGames.length === 0) return "No finished games for this round yet.";
-
+    
     const roundTips = allTips.filter(t => {
       const g = games.find(game => game.id === t.gameId);
       return g && g.round === round;
@@ -615,9 +614,12 @@ function AppContent() {
       return `• ${winnerName} (${winnerScore}) def. ${loserName} (${loserScore}) by ${margin}`;
     }).join('\n');
 
-    const topPerformers = roundStats.slice(0, 3).map((u, i) => 
+    const allPerformers = roundStats.map((u, i) => 
       `${i + 1}. ${u.displayName} - ${u.points} pts (${u.correct} correct)`
     ).join('\n');
+
+    if (roundGames.length === 0) return "No finished games for this round yet.";
+    if (roundStats.length === 0) return "No player data available for this round.";
 
     const closestGame = roundGames.reduce((prev, curr) => {
       const prevMargin = Math.abs((prev.hscore || 0) - (prev.ascore || 0));
@@ -632,8 +634,8 @@ function AppContent() {
     });
 
     const lastPlace = roundStats[roundStats.length - 1];
-    const woodenSpooners = roundStats.filter(u => u.points === lastPlace.points && u.marginError === lastPlace.marginError);
-    const woodenSpoonNames = woodenSpooners.map(u => u.displayName).join(', ');
+    const woodenSpooners = lastPlace ? roundStats.filter(u => u.points === lastPlace.points && u.marginError === lastPlace.marginError) : [];
+    const woodenSpoonNames = woodenSpooners.map(u => u.displayName).join(', ') || 'None';
 
     const funnyAnecdotes = [
       "Better luck next time! Maybe try flipping a coin?",
@@ -654,11 +656,11 @@ function AppContent() {
 🔥 RESULTS:
 ${winners}
 
-🌟 TOP PERFORMERS:
-${topPerformers}
+📊 PLAYER STANDINGS:
+${allPerformers}
 
 🎯 MARGIN MASTER:
-${roundStats.sort((a, b) => a.marginError - b.marginError)[0]?.displayName} (Error: ${roundStats.sort((a, b) => a.marginError - b.marginError)[0]?.marginError})
+${[...roundStats].sort((a, b) => a.marginError - b.marginError)[0]?.displayName || 'N/A'} (Error: ${[...roundStats].sort((a, b) => a.marginError - b.marginError)[0]?.marginError ?? 'N/A'})
 
 ⚡️ HIGHLIGHTS:
 • Closest Game: ${closestGame.hometeam} vs ${closestGame.awayteam} (${Math.abs((closestGame.hscore || 0) - (closestGame.ascore || 0))} pts)
@@ -948,6 +950,7 @@ Good luck in Round ${round + 1}! 🍀`;
 
       // Determine current round based on date (only on initial fetch)
       if (isInitial) {
+      if (finalGames.length > 0) {
         const now = new Date();
         const upcomingGame = finalGames.find(g => new Date(g.date) > now);
         if (upcomingGame) {
@@ -957,11 +960,14 @@ Good luck in Round ${round + 1}! 🍀`;
           setRecapRound(upcomingGame.round);
         } else {
           const maxRound = Math.max(...finalGames.map(g => g.round));
-          setCurrentRound(maxRound);
-          setAdminSelectedRound(maxRound);
-          setResultsSelectedRound(maxRound);
-          setRecapRound(maxRound);
+          if (isFinite(maxRound)) {
+            setCurrentRound(maxRound);
+            setAdminSelectedRound(maxRound);
+            setResultsSelectedRound(maxRound);
+            setRecapRound(maxRound);
+          }
         }
+      }
       }
     } catch (err) {
       console.error("Failed to fetch games:", err);
@@ -2443,13 +2449,15 @@ Good luck in Round ${round + 1}! 🍀`;
                     </div>
                     <div className="text-right">
                       <p className="text-xs font-bold text-stone-500 uppercase">Completion</p>
-                      <p className="text-lg font-mono font-bold text-afl-accent">{Math.round((tippedCount / roundGames.length) * 100)}%</p>
+                      <p className="text-lg font-mono font-bold text-afl-accent">
+                        {roundGames.length > 0 ? Math.round((tippedCount / roundGames.length) * 100) : 0}%
+                      </p>
                     </div>
                   </div>
                   <div className="w-full h-3 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${(tippedCount / roundGames.length) * 100}%` }}
+                      animate={{ width: `${roundGames.length > 0 ? (tippedCount / roundGames.length) * 100 : 0}%` }}
                       className="h-full bg-afl-accent shadow-[0_0_15px_rgba(255,193,7,0.4)]"
                       transition={{ duration: 1, ease: "easeOut" }}
                     />
