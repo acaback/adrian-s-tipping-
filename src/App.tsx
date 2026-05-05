@@ -493,6 +493,7 @@ function AppContent() {
   const [warRoomUserId, setWarRoomUserId] = useState<string>('');
   const [resultsUserId, setResultsUserId] = useState<string>('');
   const [resultsSubTab, setResultsSubTab] = useState<'individual' | 'round-summary'>('individual');
+  const [leaderboardSubTab, setLeaderboardSubTab] = useState<'ladder' | 'recap'>('ladder');
   const [resultsSelectedRound, setResultsSelectedRound] = useState<number>(currentRound);
   const [expandedResultsRound, setExpandedResultsRound] = useState<number | null>(null);
   const [hoveredGameId, setHoveredGameId] = useState<number | null>(null);
@@ -671,6 +672,34 @@ ${woodenSpoonNames}
 "${anecdote}"
 
 Good luck in Round ${round + 1}! 🍀`;
+  };
+
+  const generateOverallRecap = () => {
+    if (leaderboardData.length === 0) return "No season data available yet.";
+
+    const topPositions = leaderboardData.slice(0, 15).map((u, i) => 
+      `${i + 1}. ${u.displayName} - ${u.calculatedPoints} pts (Err: ${u.calculatedMargin})`
+    ).join('\n');
+
+    const totalRounds = new Set(games.filter(g => g.isFinished).map(g => g.round)).size;
+    const marginMaster = [...leaderboardData].sort((a, b) => a.calculatedMargin - b.calculatedMargin)[0];
+
+    return `🏆 AFL 2026 SEASON STANDINGS 🏆
+(After ${totalRounds} Rounds)
+
+🌟 SEASON LEADERBOARD (TOP 15):
+${topPositions}
+
+🎯 MARGIN MASTER (SEASON):
+${marginMaster?.displayName} (Total Error: ${marginMaster?.calculatedMargin})
+
+🥄 THE WOODEN SPOON:
+${lastPlace?.displayName} (${lastPlace?.calculatedPoints} pts)
+
+🔥 TOP OF THE TABLE:
+${leader?.displayName} - Setting the pace with ${leader?.calculatedPoints} points!
+
+Good luck everyone! 🍀`;
   };
 
   const copyToClipboard = (text: string) => {
@@ -3205,12 +3234,49 @@ Good luck in Round ${round + 1}! 🍀`;
 
         {activeTab === 'leaderboard' && (
           <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl overflow-hidden transition-colors">
-            <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50">
-              <h2 className="text-3xl font-serif italic dark:text-stone-100">The Ladder</h2>
-              <p className="text-xs text-stone-400 uppercase tracking-widest font-mono mt-1">2026 Season Ladder</p>
+            <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-gradient-to-br from-afl-navy to-stone-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none">
+                <Trophy className="w-48 h-48 text-white" />
+              </div>
+              <div className="relative z-10">
+                <h2 className="text-4xl font-serif italic text-white">Competition Central</h2>
+                <p className="text-afl-gold/60 text-xs uppercase tracking-[0.3em] font-mono mt-1">2026 Season Leaderboard & Analysis</p>
+              </div>
+              
+              <div className="flex flex-col gap-4 relative z-10">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex bg-white/5 backdrop-blur-md p-1 rounded-xl border border-white/10">
+                    <button 
+                      onClick={() => setLeaderboardSubTab('ladder')}
+                      className={cn(
+                        "px-6 py-2.5 text-xs font-bold uppercase tracking-widest rounded-lg transition-all",
+                        leaderboardSubTab === 'ladder' 
+                          ? "text-white shadow-lg" 
+                          : "text-white/40 hover:text-white/60"
+                      )}
+                      style={leaderboardSubTab === 'ladder' ? { backgroundColor: accentColor } : {}}
+                    >
+                      Ladder
+                    </button>
+                    <button 
+                      onClick={() => setLeaderboardSubTab('recap')}
+                      className={cn(
+                        "px-6 py-2.5 text-xs font-bold uppercase tracking-widest rounded-lg transition-all",
+                        leaderboardSubTab === 'recap' 
+                          ? "text-white shadow-lg" 
+                          : "text-white/40 hover:text-white/60"
+                      )}
+                      style={leaderboardSubTab === 'recap' ? { backgroundColor: accentColor } : {}}
+                    >
+                      Season Summary
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
             
-            <div className="overflow-x-auto">
+            {leaderboardSubTab === 'ladder' ? (
+              <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead className="sticky top-0 z-20 bg-white dark:bg-stone-900 shadow-sm">
                   <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
@@ -3334,7 +3400,7 @@ Good luck in Round ${round + 1}! 🍀`;
                         </tr>
                         {isExpanded && (
                           <tr className="bg-stone-50/30 dark:bg-stone-900/30 border-b border-stone-100 dark:border-stone-800">
-                            <td colSpan={4} className="px-8 py-8">
+                            <td colSpan={5} className="px-8 py-8">
                               <div className="space-y-6 animate-in fade-in slide-in-from-top-2 duration-200">
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-4">
@@ -3426,6 +3492,46 @@ Good luck in Round ${round + 1}! 🍀`;
                 </tbody>
               </table>
             </div>
+            ) : (
+              <div className="p-8 min-h-[400px] flex flex-col">
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <h3 className="text-2xl font-serif italic text-stone-900 dark:text-stone-100">Season Summary</h3>
+                    <p className="text-xs text-stone-500 uppercase tracking-widest font-mono mt-1">Official Tactical Intelligence Summary</p>
+                  </div>
+                  
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={() => copyToClipboard(generateOverallRecap())}
+                      className="flex items-center gap-2 px-6 py-3 bg-afl-navy text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:opacity-90 transition-all shadow-lg shadow-afl-navy/20 whitespace-nowrap"
+                    >
+                      {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      {isCopied ? 'Copied' : 'Copy Season Standing'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 bg-stone-50 dark:bg-stone-800/30 rounded-2xl border border-stone-100 dark:border-stone-700/50 p-8 font-mono text-sm overflow-y-auto max-h-[500px]">
+                  <pre className="whitespace-pre-wrap leading-relaxed text-stone-700 dark:text-stone-300">
+                    {generateOverallRecap()}
+                  </pre>
+                </div>
+                
+                <div className="mt-6 flex items-center justify-center gap-8 py-6 border-t border-stone-100 dark:border-stone-800">
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-stone-400 uppercase font-black mb-1">Rounds Finished</span>
+                    <span className="text-xl font-serif italic text-stone-900 dark:text-stone-100">
+                      {new Set(games.filter(g => g.isFinished).map(g => g.round)).size}
+                    </span>
+                  </div>
+                  <div className="w-px h-8 bg-stone-100 dark:bg-stone-800" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-stone-400 uppercase font-black mb-1">Total Players</span>
+                    <span className="text-xl font-serif italic text-stone-900 dark:text-stone-100">{allUsers.length}</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
