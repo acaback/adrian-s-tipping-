@@ -59,14 +59,11 @@ export interface RoundStatus {
   isLocked: boolean;
 }
 
-export interface BlogPost {
+export interface Message {
   id: string;
-  title: string;
-  excerpt: string;
-  content: string;
-  author: string;
-  category: 'News' | 'Analysis' | 'Injuries' | 'Tactics';
-  date: string;
-  image?: string;
-  readTime?: string;
+  uid: string;
+  displayName: string;
+  text: string;
+  createdAt: string;
+  likes?: string[];
 }

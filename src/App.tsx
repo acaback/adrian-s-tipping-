@@ -23,13 +23,15 @@ import {
   arrayRemove,
   getDocs,
   deleteDoc,
-  getDocFromServer
+  getDocFromServer,
+  addDoc,
+  orderBy,
+  limit
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Game, UserProfile, Tip, BlogPost } from './types';
+import { Game, UserProfile, Tip, Message } from './types';
 import ErrorBoundary from './components/ErrorBoundary';
-import BlogPage from './components/BlogPage';
 import { 
   Trophy, 
   Calendar, 
@@ -73,7 +75,10 @@ import {
   Printer,
   Menu,
   Info,
-  ExternalLink
+  ExternalLink,
+  MessageSquare,
+  Send,
+  Heart
 } from 'lucide-react';
 import { format, isAfter, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -86,108 +91,20 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const safeFormatInTimeZone = (dateStr: string | undefined | null, timezone: string, formatStr: string) => {
+  if (!dateStr) return 'TBA';
+  try {
+    return formatInTimeZone(parseISO(dateStr), timezone, formatStr);
+  } catch (e) {
+    return 'Invalid Date';
+  }
+};
+
 const Skeleton = ({ className }: { className?: string }) => (
   <div className={cn("animate-pulse bg-stone-200 dark:bg-stone-800 rounded-lg", className)} />
 );
 
 const AWST_TIMEZONE = 'Australia/Perth';
-
-const BLOG_POSTS: BlogPost[] = [
-  {
-    id: 'post-1',
-    title: 'AFL Tipping: Round 5 Strategy Breakdown',
-    excerpt: 'The season is heating up and Round 5 presents some of the toughest matchups yet. We break down the key tactical battles that will decide your tipping week.',
-    content: `
-The 2026 AFL season has already thrown up some massive surprises, and Round 5 is shaping up to be another defining weekend. With several top-of-the-table clashes and a few "danger games" for the favorites, tipping correctly this week requires a deep dive into the stats.
-
-## The Big Matchup: Magpies vs. Lions
-Expect a high-scoring affair at the MCG. The Lions have been dominant in the clearances, but the Magpies' transition speed remains the best in the league. 
-
-**Prediction:** Magpies by 12.
-
-## Injury Concerns
-Several key players are facing late fitness tests. Make sure to check the latest reports before the first bounce on Thursday night. 
-
-*   **Marcus Bontempelli:** Managing a minor calf strain.
-*   **Jeremy Cameron:** Day-to-day after a heavy hit last week.
-
-## Venue Advantage
-Keep an eye on the SCG factors. The smaller dimensions often favor teams with strong defensive structures and intercept marking.
-
-Stay tuned to the Command Center for live updates.
-    `,
-    author: 'Chief Analyst',
-    category: 'Analysis',
-    date: '2026-04-16T10:00:00Z',
-    image: 'https://picsum.photos/seed/mcg-melbourne/1200/600',
-    readTime: '6 min read'
-  },
-  {
-    id: 'post-2',
-    title: 'Injury Report: Key Ins & Outs for the Weekend',
-    excerpt: 'The latest team sheets are in. Several stars are set to return, while others face extended time on the sidelines. Find out how this shifts the odds.',
-    content: `
-Team selection night always brings a mix of joy and despair for tippers. Here is the definitive list of key personnel changes for the upcoming round.
-
-### Collingwood
-**IN:** Scott Pendlebury, Nick Daicos
-**OUT:** Brayden Maynard (Suspended)
-
-### Brisbane
-**IN:** Harris Andrews
-**OUT:** Zero major omissions.
-
-### Strategy Tip
-With Pendlebury and Daicos back, Collingwood's midfield depth becomes significantly more reliable. If you were on the fence about the Pies, this might be the deciding factor.
-    `,
-    author: 'Medical Scout',
-    category: 'Injuries',
-    date: '2026-04-15T16:00:00Z',
-    image: 'https://picsum.photos/seed/perth-stadium-optus/1200/600',
-    readTime: '4 min read'
-  },
-  {
-    id: 'post-3',
-    title: 'Data Deep Dive: The Accuracy Myth',
-    excerpt: 'Does goal-kicking accuracy actually win games? We look at the last 50 matches to see the correlation between conversion rates and victory.',
-    content: `
-Common wisdom says "bad kicking is bad football." But does the data back it up? We analyzed the last 50 games of the 2026 season to find the truth.
-
-### Key Findings
-1.  **Inner Consistency:** Teams that win more than 60% of their inside-50s win 85% of their games, regardless of goal-kicking accuracy.
-2.  **Pressure Gauge:** Goal accuracy drops by average of 14% when the opposition tackle count is above 70.
-
-### Conclusion
-Don't tip based solely on who has the better forward line on paper. Look at who wins the contested ball and creates the most opportunities.
-    `,
-    author: 'Stats Guru',
-    category: 'Tactics',
-    date: '2026-04-14T09:00:00Z',
-    image: 'https://picsum.photos/seed/adelaide-oval-night/1200/600',
-    readTime: '8 min read'
-  },
-  {
-    id: 'post-4',
-    title: 'Round 6 Preview: Rivalry Round',
-    excerpt: 'The biggest rivalries in the game take center stage. We look at the history and the current form to help you find the edge.',
-    content: `
-Round 6 is officially "Rivalry Round" and the schedule is absolutely stacked. From the Showdown in Adelaide to the Sydney Derby, these games often defy the ladder positions.
-
-## The Showdown: Crows vs. Power
-Historically, the underdog wins 45% of Showdowns. With Adelaide struggling and Port firing, could we be in for an upset?
-
-## The Western Derby
-Fremantle's defense is the stingiest in the league, but West Coast's young forward line is finding rhythm. 
-
-**Watch Out For:** The weather in Perth could play a massive role if the predicted storm hits.
-`,
-    author: 'Chief Analyst',
-    category: 'Analysis',
-    date: '2026-04-12T10:00:00Z',
-    image: 'https://picsum.photos/seed/scg-sydney-stadium/1200/600',
-    readTime: '7 min read'
-  }
-];
 
 const AFL_TEAMS = [
   'Adelaide Crows', 'Brisbane Lions', 'Carlton Blues', 'Collingwood Magpies',
@@ -196,6 +113,87 @@ const AFL_TEAMS = [
   'Port Adelaide Power', 'Richmond Tigers', 'St Kilda Saints', 'Sydney Swans',
   'West Coast Eagles', 'Western Bulldogs'
 ];
+
+const formatRelativeTime = (dateStr: string) => {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+  if (diffInSeconds < 60) return 'just now';
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+  if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+  return format(date, 'MMM d, h:mm a');
+};
+
+const CountdownTimer = ({ targetDate }: { targetDate: string }) => {
+  const [timeLeft, setTimeLeft] = useState<{
+    days: number;
+    hours: number;
+    minutes: number;
+    seconds: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const calculateTimeLeft = () => {
+      try {
+        const difference = parseISO(targetDate).getTime() - new Date().getTime();
+        
+        if (difference > 0) {
+          setTimeLeft({
+            days: Math.floor(difference / (1000 * 60 * 60 * 24)),
+            hours: Math.floor((difference / (1000 * 60 * 60)) % 24),
+            minutes: Math.floor((difference / 1000 / 60) % 60),
+            seconds: Math.floor((difference / 1000) % 60),
+          });
+        } else {
+          setTimeLeft(null);
+        }
+      } catch (err) {
+        setTimeLeft(null);
+      }
+    };
+
+    calculateTimeLeft();
+    const timer = setInterval(calculateTimeLeft, 1000);
+
+    return () => clearInterval(timer);
+  }, [targetDate]);
+
+  if (!timeLeft) return null;
+
+  return (
+    <div className="flex items-center justify-center gap-4 mt-6">
+      <div className="flex flex-col items-center">
+        <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center">
+          <span className="text-xl font-mono font-bold leading-none">{timeLeft.days}</span>
+        </div>
+        <span className="text-[8px] uppercase tracking-widest text-stone-500 font-bold mt-1">Days</span>
+      </div>
+      <span className="text-stone-700 text-lg font-bold pb-4">:</span>
+      <div className="flex flex-col items-center">
+        <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center">
+          <span className="text-xl font-mono font-bold leading-none">{timeLeft.hours.toString().padStart(2, '0')}</span>
+        </div>
+        <span className="text-[8px] uppercase tracking-widest text-stone-500 font-bold mt-1">Hrs</span>
+      </div>
+      <span className="text-stone-700 text-lg font-bold pb-4">:</span>
+      <div className="flex flex-col items-center">
+        <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center">
+          <span className="text-xl font-mono font-bold leading-none">{timeLeft.minutes.toString().padStart(2, '0')}</span>
+        </div>
+        <span className="text-[8px] uppercase tracking-widest text-stone-500 font-bold mt-1">Min</span>
+      </div>
+      <span className="text-stone-700 text-lg font-bold pb-4">:</span>
+      <div className="flex flex-col items-center">
+        <div className="w-10 h-10 bg-white/5 border border-stone-100/20 rounded-lg flex items-center justify-center">
+          <span className="text-xl font-mono font-bold leading-none text-afl-gold">{timeLeft.seconds.toString().padStart(2, '0')}</span>
+        </div>
+        <span className="text-[8px] uppercase tracking-widest text-stone-500 font-bold mt-1">Sec</span>
+      </div>
+    </div>
+  );
+};
 
 const AFL_TEAM_COLORS: Record<string, string> = {
   'Adelaide': '#002B5C',
@@ -440,7 +438,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
         providerId: provider.providerId,
         displayName: provider.displayName,
         email: provider.email,
@@ -450,9 +448,9 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  // We don't throw here to avoid crashing the whole app, but we could.
-  return errInfo;
+  const errorJson = JSON.stringify(errInfo);
+  console.error('Firestore Error: ', errorJson);
+  throw new Error(errorJson);
 }
 
 interface LeaderboardItem extends UserProfile {
@@ -480,8 +478,11 @@ function AppContent() {
   const [allTips, setAllTips] = useState<Tip[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentRound, setCurrentRound] = useState(1);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile' | 'blog'>('dashboard');
-  const [selectedBlogPostId, setSelectedBlogPostId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile' | 'message-board'>('dashboard');
+  const [lastViewedMessages, setLastViewedMessages] = useState<number>(() => {
+    return Number(localStorage.getItem('lastViewedMessages')) || 0;
+  });
+
   const [selectedProfileUserId, setSelectedProfileUserId] = useState<string | null>(null);
   const [profileSourceTab, setProfileSourceTab] = useState<'leaderboard' | 'results' | 'admin'>('leaderboard');
   const [standings, setStandings] = useState<StandingsItem[]>([]);
@@ -554,8 +555,19 @@ function AppContent() {
   const [recapRound, setRecapRound] = useState<number>(currentRound);
   const [isCopied, setIsCopied] = useState(false);
 
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+
+  const hasNewMessages = useMemo(() => {
+    if (messages.length === 0 || activeTab === 'message-board') return false;
+    const latestMessageTime = new Date(messages[0].createdAt).getTime();
+    return latestMessageTime > lastViewedMessages;
+  }, [messages, lastViewedMessages, activeTab]);
+
   const generateRoundRecap = (round: number) => {
     const roundGames = games.filter(g => g.round === round && g.isFinished);
+    if (roundGames.length === 0) return "No finished games for this round yet.";
     
     const roundTips = allTips.filter(t => {
       const g = games.find(game => game.id === t.gameId);
@@ -603,6 +615,8 @@ function AppContent() {
       return { ...user, correct, points, marginError };
     }).sort((a, b) => b.points - a.points || a.marginError - b.marginError);
 
+    if (roundStats.length === 0) return "No player data available for this round.";
+
     const winners = roundGames.map(g => {
       if (g.hscore === g.ascore) {
         return `• ${g.hometeam} (${g.hscore}) drew with ${g.awayteam} (${g.ascore})`;
@@ -619,20 +633,19 @@ function AppContent() {
       `${i + 1}. ${u.displayName} - ${u.points} pts (${u.correct} correct)`
     ).join('\n');
 
-    if (roundGames.length === 0) return "No finished games for this round yet.";
-    if (roundStats.length === 0) return "No player data available for this round.";
-
     const closestGame = roundGames.reduce((prev, curr) => {
+      if (!prev) return curr;
       const prevMargin = Math.abs((prev.hscore || 0) - (prev.ascore || 0));
       const currMargin = Math.abs((curr.hscore || 0) - (curr.ascore || 0));
       return currMargin < prevMargin ? curr : prev;
-    });
+    }, roundGames[0]);
 
     const biggestWin = roundGames.reduce((prev, curr) => {
+      if (!prev) return curr;
       const prevMargin = Math.abs((prev.hscore || 0) - (prev.ascore || 0));
       const currMargin = Math.abs((curr.hscore || 0) - (curr.ascore || 0));
       return currMargin > prevMargin ? curr : prev;
-    });
+    }, roundGames[0]);
 
     const lastPlace = roundStats[roundStats.length - 1];
     const woodenSpooners = lastPlace ? roundStats.filter(u => u.points === lastPlace.points && u.marginError === lastPlace.marginError) : [];
@@ -691,13 +704,13 @@ Good luck in Round ${round + 1}! 🍀`;
 ${topPositions}
 
 🎯 MARGIN MASTER (SEASON):
-${marginMaster?.displayName} (Total Error: ${marginMaster?.calculatedMargin})
+${marginMaster?.displayName || 'N/A'} (Total Error: ${marginMaster?.calculatedMargin ?? 'N/A'})
 
 🥄 THE WOODEN SPOON:
-${lastPlace?.displayName} (${lastPlace?.calculatedPoints} pts)
+${lastPlace?.displayName || 'N/A'} (${lastPlace?.calculatedPoints ?? 0} pts)
 
 🔥 TOP OF THE TABLE:
-${leader?.displayName} - Setting the pace with ${leader?.calculatedPoints} points!
+${leader?.displayName || 'N/A'} - Setting the pace with ${leader?.calculatedPoints ?? 0} points!
 
 Good luck everyone! 🍀`;
   };
@@ -978,25 +991,23 @@ Good luck everyone! 🍀`;
       console.log(`Successfully set ${finalGames.length} games.`);
 
       // Determine current round based on date (only on initial fetch)
-      if (isInitial) {
-      if (finalGames.length > 0) {
+      if (isInitial && finalGames.length > 0) {
         const now = new Date();
-        const upcomingGame = finalGames.find(g => new Date(g.date) > now);
+        const upcomingGame = finalGames.find(g => g.date && new Date(g.date) > now);
         if (upcomingGame) {
           setCurrentRound(upcomingGame.round);
           setAdminSelectedRound(upcomingGame.round);
           setResultsSelectedRound(upcomingGame.round);
           setRecapRound(upcomingGame.round);
         } else {
-          const maxRound = Math.max(...finalGames.map(g => g.round));
-          if (isFinite(maxRound)) {
+          const maxRound = Math.max(...finalGames.map(g => g.round), 0);
+          if (isFinite(maxRound) && maxRound > 0) {
             setCurrentRound(maxRound);
             setAdminSelectedRound(maxRound);
             setResultsSelectedRound(maxRound);
             setRecapRound(maxRound);
           }
         }
-      }
       }
     } catch (err) {
       console.error("Failed to fetch games:", err);
@@ -1153,6 +1164,19 @@ Good luck everyone! 🍀`;
       unsubTips();
     };
   }, [user, profile]);
+
+  // Listen for Messages
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'), limit(100));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Message);
+      setMessages(msgs);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'messages');
+    });
+    return unsubscribe;
+  }, [user]);
 
   // Validate Connection to Firestore
   useEffect(() => {
@@ -1349,6 +1373,51 @@ Good luck everyone! 🍀`;
     setIsConfirmingPost(false);
   };
 
+  const postMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !profile || !newMessage.trim()) return;
+
+    setIsSendingMessage(true);
+    try {
+      const messageData = {
+        uid: user.uid,
+        displayName: profile.displayName || 'Anonymous',
+        text: newMessage.trim(),
+        createdAt: new Date().toISOString(),
+        likes: []
+      };
+      await addDoc(collection(db, 'messages'), messageData);
+      setNewMessage('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'messages');
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  const toggleLike = async (messageId: string, likes: string[] = []) => {
+    if (!user) return;
+    const isLiked = likes.includes(user.uid);
+    const newLikes = isLiked 
+      ? likes.filter(uid => uid !== user.uid)
+      : [...likes, user.uid];
+    
+    try {
+      await updateDoc(doc(db, 'messages', messageId), { likes: newLikes });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `messages/${messageId}`);
+    }
+  };
+
+  const deleteMessage = async (messageId: string) => {
+    if (!window.confirm("Delete this message?")) return;
+    try {
+      await deleteDoc(doc(db, 'messages', messageId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `messages/${messageId}`);
+    }
+  };
+
   const leaderboardData = useMemo(() => {
     const data = allUsers.map(u => {
       const userTips = allTips.filter(t => t.uid === u.uid);
@@ -1460,7 +1529,7 @@ Good luck everyone! 🍀`;
   const leader = useMemo(() => leaderboardData.find(u => u.rank === 1), [leaderboardData]);
   const lastPlace = useMemo(() => {
     if (leaderboardData.length === 0) return null;
-    const maxRank = Math.max(...leaderboardData.map(u => u.rank));
+    const maxRank = Math.max(...leaderboardData.map(u => u.rank), 0);
     return leaderboardData.find(u => u.rank === maxRank);
   }, [leaderboardData]);
   const nextGame = useMemo(() => {
@@ -2307,15 +2376,22 @@ Good luck everyone! 🍀`;
               { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
               { id: 'standings', label: 'AFL Ladder', icon: BarChart3 },
               { id: 'results', label: 'Results', icon: CheckCircle2 },
-              { id: 'blog', label: 'News & Strategy', icon: BookOpen },
+              { id: 'message-board', label: 'Message Board', icon: MessageSquare },
             ].map((tab) => {
               const hasLiveGames = tab.id === 'war-room' && games.some(g => new Date() > new Date(g.date) && !g.isFinished);
+              const showDot = (tab.id === 'war-room' && hasLiveGames) || (tab.id === 'message-board' && hasNewMessages);
+              
               return (
                 <button
                   key={tab.id}
                   onClick={() => {
                     setActiveTab(tab.id as any);
                     setIsMobileMenuOpen(false);
+                    if (tab.id === 'message-board') {
+                      const now = Date.now();
+                      setLastViewedMessages(now);
+                      localStorage.setItem('lastViewedMessages', now.toString());
+                    }
                   }}
                   className={cn(
                     "w-full px-3 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3 relative overflow-hidden group",
@@ -2330,8 +2406,11 @@ Good luck everyone! 🍀`;
                 >
                   <tab.icon className={cn("w-5 h-5 transition-colors", activeTab === tab.id ? "text-white" : "text-stone-500 group-hover:text-stone-300")} />
                   {tab.label}
-                  {hasLiveGames && (
-                    <span className="absolute top-4 right-4 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                  {showDot && (
+                    <span className={cn(
+                      "absolute top-4 right-4 w-2 h-2 rounded-full animate-pulse",
+                      tab.id === 'war-room' ? "bg-red-500" : "bg-afl-gold shadow-[0_0_8px_rgba(255,193,7,0.8)]"
+                    )} />
                   )}
                   {activeTab === tab.id && (
                     <motion.div 
@@ -2371,18 +2450,7 @@ Good luck everyone! 🍀`;
               </>
             )}
             
-            <div className="mt-8 pt-4 border-t border-white/5 space-y-2">
-              <p className="text-[9px] font-bold text-stone-600 uppercase tracking-[0.2em] mb-1 ml-3">Support</p>
-              <a 
-                href="https://your-website.com" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="w-full px-3 py-2.5 rounded-xl text-[11px] font-bold text-stone-500 hover:text-white hover:bg-white/5 transition-all flex items-center gap-3 group"
-              >
-                <ExternalLink className="w-4 h-4 text-stone-600 group-hover:text-afl-accent" />
-                Visit My Website
-              </a>
-            </div>
+
           </nav>
           
           <div className="mt-auto p-4 border-t border-white/5">
@@ -2539,7 +2607,8 @@ Good luck everyone! 🍀`;
                       </div>
                       <div className="text-center space-y-1">
                         <p className="text-xs font-bold text-afl-gold uppercase tracking-widest">{nextGame.venue}</p>
-                        <p className="text-xl font-mono font-bold">{formatInTimeZone(parseISO(nextGame.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')}</p>
+                        <p className="text-xl font-mono font-bold">{safeFormatInTimeZone(nextGame.date, AWST_TIMEZONE, 'EEE d MMM, h:mm a')}</p>
+                        <CountdownTimer targetDate={nextGame.date} />
                       </div>
                     </div>
                   ) : (
@@ -2776,10 +2845,10 @@ Good luck everyone! 🍀`;
                                   <div>
                                     <p className="text-[8px] text-stone-400 uppercase font-bold tracking-tighter">Kick-off (AWST)</p>
                                     <p className="text-xs font-bold text-white">
-                                      {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'h:mm a')}
+                                      {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'h:mm a')}
                                     </p>
                                     <p className="text-[9px] text-stone-500">
-                                      {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEEE, d MMM')}
+                                      {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEEE, d MMM')}
                                     </p>
                                   </div>
                                 </div>
@@ -2833,7 +2902,7 @@ Good luck everyone! 🍀`;
                       <div className="flex items-center gap-3">
                         <Clock className="w-4 h-4 text-stone-400" />
                         <span className="text-xs font-medium text-stone-300">
-                          {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')} AWST • {game.venue}
+                          {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEE d MMM, h:mm a')} AWST • {game.venue}
                         </span>
                         
                         {/* Status Badges */}
@@ -3182,10 +3251,10 @@ Good luck everyone! 🍀`;
                               <div className="space-y-1">
                                 <p className="text-[10px] text-stone-400 uppercase font-bold tracking-wider">Kick-off (AWST)</p>
                                 <p className="text-sm font-medium dark:text-stone-200 flex items-center gap-2">
-                                  <Calendar className="w-4 h-4 text-afl-accent" /> {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEEE, d MMMM yyyy')}
+                                  <Calendar className="w-4 h-4 text-afl-accent" /> {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEEE, d MMMM yyyy')}
                                 </p>
                                 <p className="text-sm font-medium dark:text-stone-200 flex items-center gap-2">
-                                  <Clock className="w-4 h-4 text-afl-accent" /> {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'h:mm a')}
+                                  <Clock className="w-4 h-4 text-afl-accent" /> {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'h:mm a')}
                                 </p>
                               </div>
     
@@ -3546,33 +3615,33 @@ Good luck everyone! 🍀`;
               <table className="w-full text-left border-collapse">
                 <thead className="sticky top-0 z-20 bg-white dark:bg-stone-900 shadow-sm">
                   <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
-                    <th className="px-8 py-4 font-medium">Pos</th>
-                    <th className="px-8 py-4 font-medium">Team</th>
-                    <th className="px-8 py-4 font-medium text-center">P</th>
-                    <th className="px-8 py-4 font-medium text-center">W</th>
-                    <th className="px-8 py-4 font-medium text-center">L</th>
-                    <th className="px-8 py-4 font-medium text-center">D</th>
-                    <th className="px-8 py-4 font-medium text-center">Pts</th>
-                    <th className="px-8 py-4 font-medium text-center">%</th>
+                    <th className="px-8 py-3 font-medium">Pos</th>
+                    <th className="px-8 py-3 font-medium">Team</th>
+                    <th className="px-8 py-3 font-medium text-center">P</th>
+                    <th className="px-8 py-3 font-medium text-center">W</th>
+                    <th className="px-8 py-3 font-medium text-center">L</th>
+                    <th className="px-8 py-3 font-medium text-center">D</th>
+                    <th className="px-8 py-3 font-medium text-center">Pts</th>
+                    <th className="px-8 py-3 font-medium text-center">%</th>
                   </tr>
                 </thead>
                 <tbody>
                   {standings.map((s) => (
                     <tr key={s.name} className="border-b border-stone-50 dark:border-stone-800 hover:bg-stone-50/50 dark:hover:bg-stone-800/50 transition-colors">
-                      <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700">
+                      <td className="px-8 py-3 font-serif italic text-xl text-stone-300 dark:text-stone-700">
                         {s.rank < 10 ? `0${s.rank}` : s.rank}
                       </td>
-                      <td className="px-8 py-6">
+                      <td className="px-8 py-3">
                         <div className="flex items-center gap-3">
                           <span className="font-bold text-black dark:text-white" style={{ fontFamily: 'Arial, sans-serif' }}>{s.name}</span>
                         </div>
                       </td>
-                      <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.played}</td>
-                      <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.wins}</td>
-                      <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.losses}</td>
-                      <td className="px-8 py-6 text-center font-mono text-stone-600 dark:text-stone-400">{s.draws}</td>
-                      <td className="px-8 py-6 text-center font-serif font-bold text-xl" style={{ color: accentColor }}>{s.pts}</td>
-                      <td className="px-8 py-6 text-center font-mono text-stone-500 dark:text-stone-500">{(s.percentage || 0).toFixed(1)}</td>
+                      <td className="px-8 py-3 text-center font-mono text-stone-600 dark:text-stone-400">{s.played}</td>
+                      <td className="px-8 py-3 text-center font-mono text-stone-600 dark:text-stone-400">{s.wins}</td>
+                      <td className="px-8 py-3 text-center font-mono text-stone-600 dark:text-stone-400">{s.losses}</td>
+                      <td className="px-8 py-3 text-center font-mono text-stone-600 dark:text-stone-400">{s.draws}</td>
+                      <td className="px-8 py-3 text-center font-serif font-bold text-xl text-black dark:text-white">{s.pts}</td>
+                      <td className="px-8 py-3 text-center font-mono text-stone-500 dark:text-stone-500">{(s.percentage || 0).toFixed(1)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -3810,7 +3879,7 @@ Good luck everyone! 🍀`;
                                             <div key={game.id} className="bg-afl-navy text-white border border-white rounded-2xl p-4 shadow-sm">
                                               <div className="flex items-center justify-between mb-3">
                                                 <span className="text-[10px] uppercase tracking-widest text-stone-300 font-mono">
-                                                  {game.venue} • {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE h:mm a')}
+                                                  {game.venue} • {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEE h:mm a')}
                                                 </span>
                                                 {game.isFinished ? (
                                                   tip ? (
@@ -3994,6 +4063,116 @@ Good luck everyone! 🍀`;
                   </table>
                 </div>
               )}
+          </div>
+        )}
+
+        {activeTab === 'message-board' && (
+          <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl overflow-hidden flex flex-col h-[calc(100vh-12rem)] min-h-[600px] animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50 flex items-center justify-between">
+              <div>
+                <h2 className="text-3xl font-serif italic dark:text-stone-100">Community Message Board</h2>
+                <p className="text-xs text-stone-400 uppercase tracking-widest font-mono mt-1">Chat with other players about the game</p>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-stone-400">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Live Feed
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4 scroll-smooth bg-stone-50/20 dark:bg-stone-900/20">
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-stone-400 space-y-4">
+                  <MessageSquare className="w-12 h-12 opacity-20" />
+                  <p className="font-serif italic">No messages yet. Be the first to post!</p>
+                </div>
+              ) : (
+                messages.map((msg) => {
+                  const isMine = msg.uid === user?.uid;
+                  const profileUser = allUsers.find(u => u.uid === msg.uid);
+                  return (
+                    <motion.div 
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      key={msg.id} 
+                      className={cn(
+                        "flex gap-3 max-w-[80%]",
+                        isMine ? "ml-auto flex-row-reverse" : "mr-auto"
+                      )}
+                    >
+                      <div 
+                        className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] text-white font-bold shadow-sm"
+                        style={{ backgroundColor: profileUser?.favoriteTeam && AFL_TEAM_COLORS[profileUser.favoriteTeam] ? AFL_TEAM_COLORS[profileUser.favoriteTeam] : '#141414' }}
+                      >
+                        {msg.displayName.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="space-y-1">
+                        <div className={cn(
+                          "flex items-center gap-2 px-1",
+                          isMine ? "justify-end" : "justify-start"
+                        )}>
+                          <span className="text-[10px] font-bold text-stone-900 dark:text-stone-100">{msg.displayName}</span>
+                          <span className="text-[8px] font-mono text-stone-400">{formatRelativeTime(msg.createdAt)}</span>
+                        </div>
+                        <div className={cn(
+                          "px-4 py-2.5 rounded-2xl text-sm shadow-sm border",
+                          isMine 
+                            ? "bg-afl-navy text-white border-white/10" 
+                            : "bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 border-stone-100 dark:border-stone-700"
+                        )}>
+                          {msg.text}
+                        </div>
+                        <div className={cn(
+                          "flex items-center gap-3 px-1",
+                          isMine ? "justify-end" : "justify-start"
+                        )}>
+                          <button 
+                            onClick={() => toggleLike(msg.id, msg.likes)}
+                            className={cn(
+                              "flex items-center gap-1 text-[9px] font-bold transition-colors",
+                              msg.likes?.includes(user?.uid || '') 
+                                ? "text-red-500" 
+                                : "text-stone-400 hover:text-red-400"
+                            )}
+                          >
+                            <Heart className={cn("w-3 h-3", msg.likes?.includes(user?.uid || '') && "fill-current")} />
+                            {msg.likes?.length || 0}
+                          </button>
+                          {(isMine || profile?.role === 'admin') && (
+                            <button 
+                              onClick={() => deleteMessage(msg.id)}
+                              className="text-[9px] font-bold text-stone-400 hover:text-red-500 transition-colors"
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              )}
+            </div>
+
+            <form onSubmit={postMessage} className="p-6 border-t border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50">
+              <div className="flex items-center gap-3 bg-white dark:bg-stone-800 p-2 rounded-2xl border border-stone-200 dark:border-stone-700 shadow-inner group focus-within:ring-2 focus-within:ring-afl-accent transition-all">
+                <input 
+                  type="text" 
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  placeholder="Say something about the game..."
+                  className="flex-1 bg-transparent px-4 py-2 text-sm outline-none text-stone-900 dark:text-stone-100"
+                  disabled={isSendingMessage}
+                />
+                <button 
+                  type="submit"
+                  disabled={isSendingMessage || !newMessage.trim()}
+                  className="p-3 bg-afl-navy text-white rounded-xl shadow-lg hover:shadow-afl-navy/20 disabled:opacity-50 disabled:shadow-none transition-all"
+                >
+                  {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </button>
+              </div>
+            </form>
           </div>
         )}
 
@@ -4642,7 +4821,7 @@ Good luck everyone! 🍀`;
                         <div key={game.id} className="p-4 bg-afl-navy text-white rounded-2xl border border-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex-1">
                             <p className="text-xs font-bold text-white">{game.hometeam} vs {game.awayteam}</p>
-                            <p className="text-[10px] text-stone-300 uppercase">{formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE MMM d, h:mm a')} AWST</p>
+                            <p className="text-[10px] text-stone-300 uppercase">{safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEE MMM d, h:mm a')} AWST</p>
                           </div>
                           
                           <div className="flex flex-wrap items-center gap-3">
@@ -4923,16 +5102,6 @@ Good luck everyone! 🍀`;
             </div>
           </div>
         )}
-
-        {activeTab === 'blog' && (
-          <BlogPage 
-            posts={BLOG_POSTS} 
-            onNavigate={(tab) => {
-              setActiveTab(tab);
-              window.scrollTo(0, 0);
-            }}
-          />
-        )}
           </main>
 
           {/* Footer */}
@@ -4942,15 +5111,6 @@ Good luck everyone! 🍀`;
                 <p className="text-sm font-serif italic font-bold">Family and Friends AFL Tipping</p>
                 <div className="flex flex-col sm:flex-row items-center md:items-start gap-1 sm:gap-4 mt-1">
                   <p className="text-[10px] text-stone-400 uppercase tracking-widest">Built for the 2026 AFL Season</p>
-                  <span className="hidden sm:inline text-stone-300">•</span>
-                  <a 
-                    href="https://your-website.com" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-[10px] font-bold text-afl-navy dark:text-afl-accent hover:underline uppercase tracking-widest transition-all"
-                  >
-                    Visit My Website
-                  </a>
                 </div>
               </div>
               <div className="flex items-center gap-6">
@@ -5166,7 +5326,7 @@ Good luck everyone! 🍀`;
                       <div key={tip.gameId} className="flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl border border-stone-100 dark:border-stone-800">
                         <div className="flex-1">
                           <p className="text-[9px] text-stone-400 uppercase font-bold mb-1">
-                            {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE h:mm a')}
+                            {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEE h:mm a')}
                           </p>
                           <p className="text-sm font-bold text-stone-900 dark:text-stone-100">
                             {game.hometeam} vs {game.awayteam}
@@ -5255,7 +5415,7 @@ Good luck everyone! 🍀`;
                 <div key={game.id} className="flex justify-between items-center border-b border-stone-100 pb-4">
                   <div>
                     <p className="text-xs text-stone-400 font-bold uppercase mb-1">
-                      {formatInTimeZone(parseISO(game.date), AWST_TIMEZONE, 'EEE d MMM, h:mm a')}
+                      {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEE d MMM, h:mm a')}
                     </p>
                     <p className="text-lg font-bold text-stone-900">{game.hometeam} vs {game.awayteam}</p>
                   </div>

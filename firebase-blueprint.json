@@ -75,6 +75,19 @@
         "logo": { "type": "string" }
       },
       "required": ["id", "name", "abbrev"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "User comments on the message board",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "likes": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["uid", "displayName", "text", "createdAt"]
     }
   },
   "firestore": {
@@ -97,6 +110,10 @@
     "/tips/{tipId}": {
       "schema": "Tip",
       "description": "User tips (tipId is usually uid_gameId)"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Message board posts"
     }
   }
 }
