@@ -157,23 +157,34 @@ async function startServer() {
         let data = await response.json();
         data.source = 'live';
         
-        // If no games for current requested year, try previous years
+        // If one year (e.g. the requested year) returns empty results,
+        // iterate through years 2024, 2025, and 2026 sequentially and aggregate all games found into a single response.
         if (!data.games || data.games.length === 0) {
-          const yearsToTry = ["2025", "2024"];
+          console.log(`No games found for requested year ${year}. Querying years 2024, 2025, and 2026 sequentially to aggregate results...`);
+          const yearsToTry = ["2024", "2025", "2026"];
+          let aggregatedGames: any[] = [];
+          
           for (const fallbackYear of yearsToTry) {
-            if (year === fallbackYear) continue;
-            console.log(`No ${year} games found, trying ${fallbackYear}`);
             try {
-              response = await fetchWithRetry(`https://api.squiggle.com.au/?q=games&year=${fallbackYear}`);
-              data = await response.json();
-              if (data.games && data.games.length > 0) {
-                data.source = 'fallback';
-                console.log(`Found games in ${fallbackYear}`);
-                break;
+              console.log(`Sequential fetch of games for year ${fallbackYear}...`);
+              const resYear = await fetchWithRetry(`https://api.squiggle.com.au/?q=games&year=${fallbackYear}`);
+              const yearData = await resYear.json();
+              if (yearData.games && yearData.games.length > 0) {
+                console.log(`Found ${yearData.games.length} games for year ${fallbackYear}`);
+                aggregatedGames = aggregatedGames.concat(yearData.games);
+              } else {
+                console.log(`Year ${fallbackYear} returned empty results.`);
               }
-            } catch (e) {
-              console.warn(`${fallbackYear} fetch failed: ${e.message}`);
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              console.warn(`Failed to fetch duplicate/fallback year ${fallbackYear}: ${errMsg}`);
             }
+          }
+          
+          if (aggregatedGames.length > 0) {
+            data.games = aggregatedGames;
+            data.source = 'fallback';
+            console.log(`Successfully aggregated ${aggregatedGames.length} games from years 2024, 2025, and 2026.`);
           }
         }
 
