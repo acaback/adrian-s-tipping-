@@ -1052,21 +1052,57 @@ Good luck everyone! 🍀`;
     if (isInitial) setIsFetchingGames(true);
     try {
       console.log(`Fetching AFL games... (Attempt ${retryCount + 1})`);
-      const res = await fetch("/api/games?year=2026");
-      
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server responded with status: ${res.status}`);
+      let data: any = null;
+      let rawGames: any[] = [];
+      let isFallback = false;
+      let isCache = false;
+
+      try {
+        const res = await fetch("/api/games?year=2026");
+        
+        if (!res.ok) {
+          throw new Error(`Server responded with status: ${res.status}`);
+        }
+        
+        data = await res.json();
+        if (!data || typeof data !== 'object' || !Array.isArray(data.games)) {
+          throw new Error("Invalid API response format");
+        }
+        rawGames = data.games || [];
+        isFallback = data.source === 'fallback' || (data.games && data.games.length > 0 && data.games[0].year && data.games[0].year !== 2026);
+        isCache = data.source === 'cache';
+        console.log(`Fetched ${rawGames.length} raw games from backend API`);
+      } catch (apiErr) {
+        console.warn("Backend API games fetch failed, trying direct Squiggle API fetch from browser...", apiErr);
+        // Direct browser fetch from Squiggle API
+        try {
+          const res = await fetch("https://api.squiggle.com.au/?q=games&year=2026");
+          if (!res.ok) throw new Error(`Squiggle returned ${res.status}`);
+          data = await res.json();
+          rawGames = data.games || [];
+          isFallback = false;
+          isCache = false;
+          console.log(`Fetched ${rawGames.length} raw games directly from Squiggle API`);
+          
+          // If no 2026 games, try 2025 as fallback
+          if (rawGames.length === 0) {
+            console.log("No 2026 games found on public Squiggle API, trying 2025...");
+            const res25 = await fetch("https://api.squiggle.com.au/?q=games&year=2025");
+            if (res25.ok) {
+              data = await res25.json();
+              rawGames = data.games || [];
+              isFallback = true;
+              console.log(`Fallback: Loaded ${rawGames.length} games for year 2025 from Squiggle API`);
+            }
+          }
+        } catch (squiggleErr) {
+          console.error("Direct Squiggle API fetch failed as well:", squiggleErr);
+          throw apiErr; // rethrow the original backend API error to be caught by outer try-catch
+        }
       }
       
-      const data = await res.json();
-      const rawGames: any[] = data.games || [];
-      console.log(`Fetched ${rawGames.length} raw games from source: ${data.source || 'unknown'}`);
-      
-      // Check if it's fallback data
-      const isFallback = data.source === 'fallback' || (data.games && data.games.length > 0 && data.games[0].year && data.games[0].year !== 2026);
-      const isCache = data.source === 'cache';
-      setApiStatus(prev => ({ ...prev, games: isCache ? 'cache' : (isFallback ? 'fallback' : 'success') }));
+      const sourceInfo = isCache ? 'cache' : (isFallback ? 'fallback' : 'success');
+      setApiStatus(prev => ({ ...prev, games: sourceInfo }));
       
       if (rawGames.length === 0 && isInitial) {
         console.warn("No AFL games found in response.");
@@ -1179,20 +1215,57 @@ Good luck everyone! 🍀`;
     setIsFetchingStandings(true);
     try {
       console.log(`Fetching AFL standings... (Attempt ${retryCount + 1})`);
-      const res = await fetch("/api/standings?year=2026");
-      
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server responded with status: ${res.status}`);
+      let data: any = null;
+      let rawStandings: any[] = [];
+      let isFallback = false;
+      let isCache = false;
+
+      try {
+        const res = await fetch("/api/standings?year=2026");
+        
+        if (!res.ok) {
+          throw new Error(`Server responded with status: ${res.status}`);
+        }
+        
+        data = await res.json();
+        if (!data || typeof data !== 'object' || !Array.isArray(data.standings)) {
+          throw new Error("Invalid API response format");
+        }
+        rawStandings = data.standings || [];
+        isFallback = data.source === 'fallback';
+        isCache = data.source === 'cache';
+        console.log(`Fetched ${rawStandings.length} raw standings from backend API`);
+      } catch (apiErr) {
+        console.warn("Backend API standings fetch failed, trying direct Squiggle API fetch from browser...", apiErr);
+        // Direct browser fetch from Squiggle API
+        try {
+          const res = await fetch("https://api.squiggle.com.au/?q=standings&year=2026");
+          if (!res.ok) throw new Error(`Squiggle returned ${res.status}`);
+          data = await res.json();
+          rawStandings = data.standings || [];
+          isFallback = false;
+          isCache = false;
+          console.log(`Fetched ${rawStandings.length} raw standings directly from Squiggle API`);
+          
+          // If no 2026 standings, try 2025 as fallback
+          if (rawStandings.length === 0) {
+            console.log("No 2026 standings found on public Squiggle API, trying 2025...");
+            const res25 = await fetch("https://api.squiggle.com.au/?q=standings&year=2025");
+            if (res25.ok) {
+              data = await res25.json();
+              rawStandings = data.standings || [];
+              isFallback = true;
+              console.log(`Fallback: Loaded ${rawStandings.length} standings for year 2025 from Squiggle API`);
+            }
+          }
+        } catch (squiggleErr) {
+          console.error("Direct Squiggle standings fetch failed:", squiggleErr);
+          throw apiErr; // rethrow the original backend API error to be caught by outer try-catch
+        }
       }
       
-      const data = await res.json();
-      const rawStandings: any[] = data.standings || [];
-      console.log(`Fetched ${rawStandings.length} raw standings from source: ${data.source || 'unknown'}`);
-      
-      const isFallback = data.source === 'fallback';
-      const isCache = data.source === 'cache';
-      setApiStatus(prev => ({ ...prev, standings: isCache ? 'cache' : (isFallback ? 'fallback' : 'success') }));
+      const sourceInfo = isCache ? 'cache' : (isFallback ? 'fallback' : 'success');
+      setApiStatus(prev => ({ ...prev, standings: sourceInfo }));
       
       const processedStandings: StandingsItem[] = rawStandings.map(s => ({
         rank: s.rank,
