@@ -88,6 +88,19 @@
         "likes": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["uid", "displayName", "text", "createdAt"]
+    },
+    "PollVote": {
+      "title": "Poll Vote",
+      "description": "User vote on game winner poll",
+      "type": "object",
+      "properties": {
+        "gameId": { "type": "number" },
+        "uid": { "type": "string" },
+        "vote": { "type": "string", "enum": ["home", "away"] },
+        "round": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["gameId", "uid", "vote", "round", "createdAt"]
     }
   },
   "firestore": {
@@ -114,6 +127,10 @@
     "/messages/{messageId}": {
       "schema": "Message",
       "description": "Message board posts"
+    },
+    "/poll_votes/{voteId}": {
+      "schema": "PollVote",
+      "description": "Community poll votes"
     }
   }
 }

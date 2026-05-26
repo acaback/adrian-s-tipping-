@@ -121,7 +121,18 @@ service cloud.firestore {
              data.displayName is string && data.displayName.size() <= 100 &&
              data.text is string && data.text.size() <= 1000 &&
              isValidDateString(data.createdAt) &&
-             (!('likes' in data) || (data.likes is list && data.likes.size() <= 500));
+             (!('likes' in data) || (data.likes is list && data.likes.size() <= 500)) &&
+             (!('toUid' in data) || (data.toUid is string && data.toUid.size() <= 100)) &&
+             (!('toDisplayName' in data) || (data.toDisplayName is string && data.toDisplayName.size() <= 100));
+    }
+
+    function isValidPollVote(data) {
+      return data.keys().hasAll(['gameId', 'uid', 'vote', 'round', 'createdAt']) &&
+             data.gameId is number &&
+             data.uid == request.auth.uid &&
+             data.vote in ['home', 'away'] &&
+             data.round is number &&
+             isValidDateString(data.createdAt);
     }
 
     // Rules
@@ -197,7 +208,7 @@ service cloud.firestore {
     }
 
     match /messages/{messageId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create: if isAuthenticated() && 
                       (isOwner(request.resource.data.uid) || isAdmin()) && 
                       isValidMessage(request.resource.data);
@@ -210,6 +221,19 @@ service cloud.firestore {
         )
       );
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+    }
+
+    match /poll_votes/{voteId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && 
+                      request.resource.data.uid == request.auth.uid &&
+                      isValidPollVote(request.resource.data);
+      allow update: if isAuthenticated() && 
+                      resource.data.uid == request.auth.uid &&
+                      request.resource.data.uid == request.auth.uid &&
+                      isValidPollVote(request.resource.data) &&
+                      request.resource.data.gameId == resource.data.gameId;
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
     }
   }
 }

@@ -30,7 +30,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Game, UserProfile, Tip, Message } from './types';
+import { Game, UserProfile, Tip, Message, PollVote } from './types';
 import ErrorBoundary from './components/ErrorBoundary';
 import { 
   Trophy, 
@@ -78,7 +78,11 @@ import {
   ExternalLink,
   MessageSquare,
   Send,
-  Heart
+  Heart,
+  TrendingUp,
+  RotateCcw,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { format, isAfter, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -86,6 +90,15 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
+import { 
+  ResponsiveContainer, 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip as RechartsTooltip
+} from 'recharts';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -191,6 +204,75 @@ const CountdownTimer = ({ targetDate }: { targetDate: string }) => {
         </div>
         <span className="text-[8px] uppercase tracking-widest text-stone-500 font-bold mt-1">Sec</span>
       </div>
+    </div>
+  );
+};
+
+const GamePoll = ({ game, pollVotes, onVote, currentUserUid }: { game: Game, pollVotes: PollVote[], onVote: (v: 'home' | 'away') => void, currentUserUid?: string }) => {
+  const homeVotes = pollVotes.filter(v => v.gameId === game.id && v.vote === 'home').length;
+  const awayVotes = pollVotes.filter(v => v.gameId === game.id && v.vote === 'away').length;
+  const total = homeVotes + awayVotes;
+  const myVote = pollVotes.find(v => v.gameId === game.id && v.uid === currentUserUid)?.vote;
+
+  const homePercent = total > 0 ? Math.round((homeVotes / total) * 100) : 50;
+  const awayPercent = total > 0 ? Math.round((awayVotes / total) * 100) : 50;
+
+  if (game.isFinished) {
+    return (
+      <div className="mt-4 p-3 bg-stone-100/50 dark:bg-stone-800/50 rounded-xl">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-[8px] font-bold uppercase tracking-widest text-stone-400">Final Community Poll</span>
+          <span className="text-[10px] font-mono font-bold text-stone-500">{total} votes</span>
+        </div>
+        <div className="flex items-center gap-2 h-2 rounded-full overflow-hidden mb-1">
+          <div className="h-full bg-afl-navy" style={{ width: `${homePercent}%` }} />
+          <div className="h-full bg-afl-accent" style={{ width: `${awayPercent}%` }} />
+        </div>
+        <div className="flex justify-between text-[9px] font-bold uppercase">
+          <span className={cn(game.winner === game.hometeam && "text-emerald-500")}>{game.hometeam} {homePercent}%</span>
+          <span className={cn(game.winner === game.awayteam && "text-emerald-500")}>{awayPercent}% {game.awayteam}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-[8px] font-bold uppercase tracking-widest text-stone-400">Community Choice</span>
+        <span className="text-[10px] font-mono font-bold text-stone-500">{total} {total === 1 ? 'vote' : 'votes'} cast</span>
+      </div>
+      <div className="flex gap-2">
+        <button 
+          onClick={() => onVote('home')}
+          className={cn(
+            "flex-1 p-2 rounded-xl border text-[10px] font-bold transition-all flex flex-col items-center gap-1",
+            myVote === 'home' 
+              ? "bg-afl-navy border-afl-navy text-white shadow-md shadow-afl-navy/20" 
+              : "bg-white dark:bg-stone-900 border-stone-100 dark:border-stone-800 text-stone-600 dark:text-stone-400 hover:border-stone-300 dark:hover:border-stone-700"
+          )}
+        >
+          <span>{game.hometeam}</span>
+          {total > 0 && <span className="opacity-60">{homePercent}%</span>}
+        </button>
+        <button 
+          onClick={() => onVote('away')}
+          className={cn(
+            "flex-1 p-2 rounded-xl border text-[10px] font-bold transition-all flex flex-col items-center gap-1",
+            myVote === 'away' 
+              ? "bg-afl-navy border-afl-navy text-white shadow-md shadow-afl-navy/20" 
+              : "bg-white dark:bg-stone-900 border-stone-100 dark:border-stone-800 text-stone-600 dark:text-stone-400 hover:border-stone-300 dark:hover:border-stone-700"
+          )}
+        >
+          <span>{game.awayteam}</span>
+          {total > 0 && <span className="opacity-60">{awayPercent}%</span>}
+        </button>
+      </div>
+      {total > 0 && (
+        <div className="w-full h-1 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
+          <div className="h-full bg-afl-navy" style={{ width: `${homePercent}%` }} />
+        </div>
+      )}
     </div>
   );
 };
@@ -478,7 +560,7 @@ function AppContent() {
   const [allTips, setAllTips] = useState<Tip[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentRound, setCurrentRound] = useState(1);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile' | 'message-board'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'war-room' | 'leaderboard' | 'standings' | 'results' | 'admin' | 'player-profile' | 'message-board' | 'fixtures'>('dashboard');
   const [lastViewedMessages, setLastViewedMessages] = useState<number>(() => {
     return Number(localStorage.getItem('lastViewedMessages')) || 0;
   });
@@ -494,15 +576,56 @@ function AppContent() {
   const [warRoomUserId, setWarRoomUserId] = useState<string>('');
   const [resultsUserId, setResultsUserId] = useState<string>('');
   const [resultsSubTab, setResultsSubTab] = useState<'individual' | 'round-summary'>('individual');
+  const [resultsChartRange, setResultsChartRange] = useState<'all' | '5' | '10'>('all');
+  const [showMatchWinners, setShowMatchWinners] = useState<boolean>(true);
   const [leaderboardSubTab, setLeaderboardSubTab] = useState<'ladder' | 'recap'>('ladder');
   const [resultsSelectedRound, setResultsSelectedRound] = useState<number>(currentRound);
+  const [fixturesSelectedRound, setFixturesSelectedRound] = useState<number>(currentRound);
   const [expandedResultsRound, setExpandedResultsRound] = useState<number | null>(null);
   const [hoveredGameId, setHoveredGameId] = useState<number | null>(null);
   
   // Sorting State
-  const [leaderboardSort, setLeaderboardSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'points', direction: 'desc' });
-  const [resultsIndividualSort, setResultsIndividualSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'round', direction: 'desc' });
-  const [resultsRoundSummarySort, setResultsRoundSummarySort] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'points', direction: 'desc' });
+  const [leaderboardSort, setLeaderboardSort] = useState<{ key: string; direction: 'asc' | 'desc' }>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('leaderboardSort');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          // ignore error
+        }
+      }
+    }
+    return { key: 'points', direction: 'desc' };
+  });
+
+  const [resultsIndividualSort, setResultsIndividualSort] = useState<{ key: string; direction: 'asc' | 'desc' }>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('resultsIndividualSort');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          // ignore error
+        }
+      }
+    }
+    return { key: 'round', direction: 'desc' };
+  });
+
+  const [resultsRoundSummarySort, setResultsRoundSummarySort] = useState<{ key: string; direction: 'asc' | 'desc' }>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('resultsRoundSummarySort');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          // ignore error
+        }
+      }
+    }
+    return { key: 'points', direction: 'desc' };
+  });
 
   // Admin User Management State
   const [newUserName, setNewUserName] = useState('');
@@ -527,6 +650,10 @@ function AppContent() {
     }
     return true;
   });
+
+  const [profileNewMessage, setProfileNewMessage] = useState('');
+  const [isSendingProfileMessage, setIsSendingProfileMessage] = useState(false);
+  const [directMessageNotification, setDirectMessageNotification] = useState<{ id: string; sender: string; text: string } | null>(null);
 
   // Email/Password Auth State
   const [email, setEmail] = useState('');
@@ -556,8 +683,11 @@ function AppContent() {
   const [isCopied, setIsCopied] = useState(false);
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pollVotes, setPollVotes] = useState<PollVote[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [roundOutlook, setRoundOutlook] = useState<string | null>(null);
+  const [isOutlookLoading, setIsOutlookLoading] = useState(false);
 
   const hasNewMessages = useMemo(() => {
     if (messages.length === 0 || activeTab === 'message-board') return false;
@@ -921,7 +1051,7 @@ Good luck everyone! 🍀`;
   const fetchGames = async (isInitial = true, retryCount = 0) => {
     if (isInitial) setIsFetchingGames(true);
     try {
-      console.log(`Fetching AFL games for 2026 (Attempt ${retryCount + 1})...`);
+      console.log(`Fetching AFL games... (Attempt ${retryCount + 1})`);
       const res = await fetch("/api/games?year=2026");
       
       if (!res.ok) {
@@ -931,10 +1061,10 @@ Good luck everyone! 🍀`;
       
       const data = await res.json();
       const rawGames: any[] = data.games || [];
-      console.log(`Fetched ${rawGames.length} raw games.`);
+      console.log(`Fetched ${rawGames.length} raw games from source: ${data.source || 'unknown'}`);
       
-      // Check if it's fallback data (Squiggle API returns games for the requested year)
-      const isFallback = data.source === 'fallback' || (data.games && data.games.length > 0 && data.games[0].year !== 2026);
+      // Check if it's fallback data
+      const isFallback = data.source === 'fallback' || (data.games && data.games.length > 0 && data.games[0].year && data.games[0].year !== 2026);
       const isCache = data.source === 'cache';
       setApiStatus(prev => ({ ...prev, games: isCache ? 'cache' : (isFallback ? 'fallback' : 'success') }));
       
@@ -998,6 +1128,7 @@ Good luck everyone! 🍀`;
           setCurrentRound(upcomingGame.round);
           setAdminSelectedRound(upcomingGame.round);
           setResultsSelectedRound(upcomingGame.round);
+          setFixturesSelectedRound(upcomingGame.round);
           setRecapRound(upcomingGame.round);
         } else {
           const maxRound = Math.max(...finalGames.map(g => g.round), 0);
@@ -1005,6 +1136,7 @@ Good luck everyone! 🍀`;
             setCurrentRound(maxRound);
             setAdminSelectedRound(maxRound);
             setResultsSelectedRound(maxRound);
+            setFixturesSelectedRound(maxRound);
             setRecapRound(maxRound);
           }
         }
@@ -1046,7 +1178,7 @@ Good luck everyone! 🍀`;
   const fetchStandings = async (retryCount = 0) => {
     setIsFetchingStandings(true);
     try {
-      console.log(`Fetching AFL standings for 2026 (Attempt ${retryCount + 1})...`);
+      console.log(`Fetching AFL standings... (Attempt ${retryCount + 1})`);
       const res = await fetch("/api/standings?year=2026");
       
       if (!res.ok) {
@@ -1056,9 +1188,9 @@ Good luck everyone! 🍀`;
       
       const data = await res.json();
       const rawStandings: any[] = data.standings || [];
-      console.log(`Fetched ${rawStandings.length} raw standings.`);
+      console.log(`Fetched ${rawStandings.length} raw standings from source: ${data.source || 'unknown'}`);
       
-      const isFallback = data.source === 'fallback' || (data.standings && data.standings.length > 0 && data.standings[0].year !== 2026);
+      const isFallback = data.source === 'fallback';
       const isCache = data.source === 'cache';
       setApiStatus(prev => ({ ...prev, standings: isCache ? 'cache' : (isFallback ? 'fallback' : 'success') }));
       
@@ -1167,7 +1299,6 @@ Good luck everyone! 🍀`;
 
   // Listen for Messages
   useEffect(() => {
-    if (!user) return;
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'), limit(100));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Message);
@@ -1176,7 +1307,49 @@ Good luck everyone! 🍀`;
       handleFirestoreError(error, OperationType.LIST, 'messages');
     });
     return unsubscribe;
-  }, [user]);
+  }, []);
+
+  // Check for new direct messages posted to me on login/active refresh
+  useEffect(() => {
+    if (!user || messages.length === 0) {
+      setDirectMessageNotification(null);
+      return;
+    }
+    
+    const myDMs = messages.filter(m => m.toUid === user.uid && m.uid !== user.uid);
+    if (myDMs.length === 0) {
+      setDirectMessageNotification(null);
+      return;
+    }
+
+    const sortedDMs = [...myDMs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const latestMsg = sortedDMs[0];
+
+    const seenMapKey = `seen_dm_${user.uid}`;
+    const seenIds = JSON.parse(localStorage.getItem(seenMapKey) || '[]');
+    
+    if (!seenIds.includes(latestMsg.id)) {
+      setDirectMessageNotification({
+        id: latestMsg.id,
+        sender: latestMsg.displayName,
+        text: latestMsg.text
+      });
+    } else {
+      setDirectMessageNotification(null);
+    }
+  }, [user, messages]);
+
+  // Listen for Poll Votes
+  useEffect(() => {
+    const q = query(collection(db, 'poll_votes'), where('round', '==', currentRound));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const votes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as PollVote);
+      setPollVotes(votes);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'poll_votes');
+    });
+    return unsubscribe;
+  }, [currentRound]);
 
   // Validate Connection to Firestore
   useEffect(() => {
@@ -1201,6 +1374,15 @@ Good luck everyone! 🍀`;
   useEffect(() => {
     setPendingTips({});
   }, [warRoomUserId, currentRound]);
+
+  useEffect(() => {
+    if (activeTab === 'fixtures') {
+      const element = document.getElementById(`fixture-round-btn-${fixturesSelectedRound}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      }
+    }
+  }, [fixturesSelectedRound, activeTab]);
 
   const handleLogin = async () => {
     setAuthLoading(true);
@@ -1418,7 +1600,169 @@ Good luck everyone! 🍀`;
     }
   };
 
+  const postProfileMessage = async (e: React.FormEvent, recipientUid: string, recipientName: string) => {
+    e.preventDefault();
+    if (!user || !profile || !profileNewMessage.trim()) return;
+
+    setIsSendingProfileMessage(true);
+    try {
+      const messageData = {
+        uid: user.uid,
+        displayName: profile.displayName || 'Anonymous',
+        text: profileNewMessage.trim(),
+        createdAt: new Date().toISOString(),
+        likes: [],
+        toUid: recipientUid,
+        toDisplayName: recipientName
+      };
+      await addDoc(collection(db, 'messages'), messageData);
+      setProfileNewMessage('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'messages');
+    } finally {
+      setIsSendingProfileMessage(false);
+    }
+  };
+
+  const markMessageAsRead = (msgId: string) => {
+    if (!user) return;
+    const seenMapKey = `seen_dm_${user.uid}`;
+    const seenIds = JSON.parse(localStorage.getItem(seenMapKey) || '[]');
+    if (!seenIds.includes(msgId)) {
+      seenIds.push(msgId);
+      localStorage.setItem(seenMapKey, JSON.stringify(seenIds));
+    }
+    setDirectMessageNotification(null);
+  };
+
+  const castPollVote = async (gameId: number, vote: 'home' | 'away', gameRound: number) => {
+    if (!user) return;
+    
+    // Check if user already voted for this game
+    const existingVote = pollVotes.find(v => v.gameId === gameId && v.uid === user.uid);
+    if (existingVote) {
+      if (existingVote.vote === vote) {
+        // Toggle off
+        try {
+          await deleteDoc(doc(db, 'poll_votes', existingVote.id));
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `poll_votes/${existingVote.id}`);
+        }
+      } else {
+        // Switch vote
+        try {
+          await updateDoc(doc(db, 'poll_votes', existingVote.id), { vote, createdAt: new Date().toISOString() });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `poll_votes/${existingVote.id}`);
+        }
+      }
+    } else {
+      // New vote
+      try {
+        await addDoc(collection(db, 'poll_votes'), {
+          gameId,
+          uid: user.uid,
+          vote,
+          round: gameRound,
+          createdAt: new Date().toISOString()
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, 'poll_votes');
+      }
+    }
+  };
+
+  const getRoundOutlook = async () => {
+    if (roundOutlook) return; // Only fetch once per session or when round changes
+
+    setIsOutlookLoading(true);
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error("API Key missing");
+
+      const ai = new GoogleGenAI({ apiKey });
+      const roundGamesList = games.filter(g => g.round === currentRound);
+      
+      const prompt = `As the AFL "War Room" Strategist, provide a punchy high-level outlook for Round ${currentRound} of the 2026 Season. 
+      Analyze these matches: ${roundGamesList.map(g => `${g.hometeam} vs ${g.awayteam}`).join(', ')}.
+      Who are the "Lock of the Week" and the "Danger Game"? (Total 80 words max). Use Aussie footy slang.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+      });
+
+      setRoundOutlook(response.text || "Outlook unclear. Play hard!");
+    } catch (err) {
+      console.error("Outlook failed:", err);
+      setRoundOutlook("Scout is recalibrating sensors for the round. Check back soon!");
+    } finally {
+      setIsOutlookLoading(false);
+    }
+  };
+
   const leaderboardData = useMemo(() => {
+    // Calculate previous ranks first
+    const finishedRounds = games.filter(g => g.isFinished).map(g => g.round);
+    const latestFinishedRound = finishedRounds.length > 0 ? Math.max(...finishedRounds) : 0;
+    
+    const prevRanksMap: Record<string, number> = {};
+    if (latestFinishedRound > 0) {
+      const prevGames = games.filter(g => g.isFinished && g.round < latestFinishedRound);
+      if (prevGames.length > 0) {
+        const prevData = allUsers.map(u => {
+          const userTips = allTips.filter(t => t.uid === u.uid);
+          let prevPoints = 0;
+          let prevMarginError = 0;
+
+          // Draw points - Every player gets 1 point for every finished draw in these previous games
+          const drawnPrevGames = prevGames.filter(g => g.hscore !== null && g.ascore !== null && g.hscore === g.ascore).length;
+          prevPoints += drawnPrevGames;
+
+          prevGames.forEach(game => {
+            const tip = userTips.find(t => t.gameId === game.id);
+            const actualMargin = Math.abs((game.hscore || 0) - (game.ascore || 0));
+            if (game.hscore === game.ascore) return;
+
+            if (tip) {
+              if (game.winner === tip.selectedTeam) {
+                prevPoints += 1;
+                if (game.isFirstInRound && tip.margin !== undefined) {
+                  if (tip.margin === actualMargin) {
+                    prevPoints += 1;
+                  }
+                  prevMarginError += Math.abs(tip.margin - actualMargin);
+                }
+              } else if (game.isFirstInRound && tip.margin !== undefined) {
+                prevMarginError += Math.abs(tip.margin - actualMargin);
+              }
+            } else {
+              if (game.winner === game.awayteam) {
+                prevPoints += 1;
+              }
+            }
+          });
+
+          return {
+            uid: u.uid,
+            prevPoints,
+            prevMarginError
+          };
+        });
+
+        const prevRanked = [...prevData].sort((a, b) => {
+          if (b.prevPoints !== a.prevPoints) {
+            return b.prevPoints - a.prevPoints;
+          }
+          return a.prevMarginError - b.prevMarginError;
+        });
+
+        prevRanked.forEach((item, index) => {
+          prevRanksMap[item.uid] = index + 1;
+        });
+      }
+    }
+
     const data = allUsers.map(u => {
       const userTips = allTips.filter(t => t.uid === u.uid);
       let points = 0;
@@ -1478,7 +1822,8 @@ Good luck everyone! 🍀`;
         ...u,
         calculatedPoints: points,
         calculatedMargin: marginError,
-        form: form
+        form: form,
+        prevRank: prevRanksMap[u.uid]
       } as LeaderboardItem;
     });
 
@@ -1713,22 +2058,60 @@ Good luck everyone! 🍀`;
     });
   }, [resultsUserId, user, games, allTips, resultsIndividualSort]);
 
+  const resultsChartData = useMemo(() => {
+    const fullData = [...userResults]
+      .filter(r => r.finishedGames > 0)
+      .sort((a, b) => a.round - b.round);
+
+    const mapped = fullData.map((r, idx) => {
+      const prevRoundData = idx > 0 ? fullData[idx - 1] : null;
+      const change = prevRoundData !== null ? r.correct - prevRoundData.correct : null;
+      return {
+        name: r.round === 0 ? "Opening" : `Round ${r.round}`,
+        "Correct Tips": r.correct,
+        "Total Games": r.totalGames,
+        "Points": r.points,
+        "Margin": r.marginError,
+        "Change": change
+      };
+    });
+
+    if (resultsChartRange === '5') {
+      return mapped.slice(-5);
+    } else if (resultsChartRange === '10') {
+      return mapped.slice(-10);
+    }
+    return mapped;
+  }, [userResults, resultsChartRange]);
+
   const handleSort = (section: 'leaderboard' | 'individual' | 'summary', key: string) => {
     if (section === 'leaderboard') {
-      setLeaderboardSort(prev => ({
-        key,
-        direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
-      }));
+      setLeaderboardSort(prev => {
+        const next: { key: string; direction: 'asc' | 'desc' } = {
+          key,
+          direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+        };
+        localStorage.setItem('leaderboardSort', JSON.stringify(next));
+        return next;
+      });
     } else if (section === 'individual') {
-      setResultsIndividualSort(prev => ({
-        key,
-        direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
-      }));
+      setResultsIndividualSort(prev => {
+        const next: { key: string; direction: 'asc' | 'desc' } = {
+          key,
+          direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+        };
+        localStorage.setItem('resultsIndividualSort', JSON.stringify(next));
+        return next;
+      });
     } else if (section === 'summary') {
-      setResultsRoundSummarySort(prev => ({
-        key,
-        direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
-      }));
+      setResultsRoundSummarySort(prev => {
+        const next: { key: string; direction: 'asc' | 'desc' } = {
+          key,
+          direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc'
+        };
+        localStorage.setItem('resultsRoundSummarySort', JSON.stringify(next));
+        return next;
+      });
     }
   };
 
@@ -2373,6 +2756,7 @@ Good luck everyone! 🍀`;
             {[
               { id: 'dashboard', label: 'Overview', icon: LayoutGrid },
               { id: 'war-room', label: 'Tips', icon: Calendar },
+              { id: 'fixtures', label: 'AFL Fixtures', icon: FileSpreadsheet },
               { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
               { id: 'standings', label: 'AFL Ladder', icon: BarChart3 },
               { id: 'results', label: 'Results', icon: CheckCircle2 },
@@ -2471,7 +2855,43 @@ Good luck everyone! 🍀`;
         {/* Content Area */}
         <div className="flex-1 flex flex-col min-w-0">
           <main className="px-6 py-8 flex-1">
-        {error && (
+            {/* Direct Message Notification Bar */}
+            {directMessageNotification && (
+              <div className="mb-6 p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40 rounded-3xl flex items-center justify-between gap-4 text-emerald-800 dark:text-emerald-300 text-sm animate-in slide-in-from-top-4 duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-500">
+                    <MessageSquare className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="font-bold">New message received!</p>
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                      <span className="font-semibold">{directMessageNotification.sender}</span> left a note on your wall: <span className="italic">"{directMessageNotification.text}"</span>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => {
+                      setActiveTab('player-profile');
+                      setSelectedProfileUserId(user?.uid || null);
+                      markMessageAsRead(directMessageNotification.id);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition-all whitespace-nowrap"
+                  >
+                    View My Wall
+                  </button>
+                  <button 
+                    onClick={() => markMessageAsRead(directMessageNotification.id)}
+                    className="p-1 px-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-lg text-emerald-600 dark:text-emerald-400 transition-colors"
+                    title="Dismiss"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <div className="flex-1 flex items-center justify-between gap-4">
@@ -2526,6 +2946,54 @@ Good luck everyone! 🍀`;
               }}
               className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
             >
+              {/* Round Outlook Card */}
+              <motion.div 
+                variants={{
+                  hidden: { opacity: 0, y: 20 },
+                  visible: { opacity: 1, y: 0 }
+                }}
+                className="lg:col-span-4 bg-gradient-to-r from-afl-navy to-stone-900 rounded-3xl border border-white/10 p-8 shadow-xl relative overflow-hidden group"
+              >
+                <div className="absolute top-0 right-0 p-8 opacity-10">
+                  <Star className="w-24 h-24 text-afl-accent" />
+                </div>
+                <div className="relative z-10">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-afl-accent/20 rounded-xl text-afl-accent">
+                        <Zap className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold uppercase tracking-widest text-white">Round {currentRound} Outlook</h3>
+                        <p className="text-[10px] font-mono text-stone-400">Provided by War Room Intelligence</p>
+                      </div>
+                    </div>
+                    {!roundOutlook && !isOutlookLoading && (
+                      <button 
+                        onClick={getRoundOutlook}
+                        className="px-6 py-2.5 bg-afl-accent text-afl-navy rounded-xl text-[10px] font-bold uppercase tracking-widest hover:shadow-[0_0_15px_rgba(255,193,7,0.5)] transition-all"
+                      >
+                        Generate Outlook
+                      </button>
+                    )}
+                  </div>
+                  
+                  {isOutlookLoading ? (
+                    <div className="flex items-center gap-3 py-4">
+                      <Loader2 className="w-4 h-4 animate-spin text-afl-accent" />
+                      <p className="text-sm font-serif italic text-stone-300">Scouting the grounds...</p>
+                    </div>
+                  ) : roundOutlook ? (
+                    <div className="bg-white/5 p-4 rounded-xl border border-white/10 relative">
+                      <p className="text-sm text-stone-100 leading-relaxed font-serif italic animate-in fade-in slide-in-from-left-4">
+                        "{roundOutlook}"
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-stone-400 font-serif italic">Get the latest tactical intel for the upcoming round.</p>
+                  )}
+                </div>
+              </motion.div>
               {/* Tipping Progress */}
               <motion.div 
                 variants={{
@@ -3294,6 +3762,15 @@ Good luck everyone! 🍀`;
                         </motion.div>
                       )}
                     </AnimatePresence>
+
+                    <div className="px-4 pb-4 mt-auto">
+                      <GamePoll 
+                        game={game} 
+                        pollVotes={pollVotes} 
+                        onVote={(vote) => castPollVote(game.id, vote, game.round)} 
+                        currentUserUid={user?.uid} 
+                      />
+                    </div>
                   </motion.div>
                 );
               })}
@@ -3303,7 +3780,7 @@ Good luck everyone! 🍀`;
 
         {activeTab === 'leaderboard' && (
           <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl overflow-hidden transition-colors">
-            <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-gradient-to-br from-afl-navy to-stone-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden">
+            <div className="px-8 py-5 border-b border-stone-100 dark:border-stone-800 bg-gradient-to-br from-afl-navy to-stone-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden">
               <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none">
                 <Trophy className="w-48 h-48 text-white" />
               </div>
@@ -3349,27 +3826,27 @@ Good luck everyone! 🍀`;
               <table className="w-full text-left border-collapse">
                 <thead className="sticky top-0 z-20 bg-white dark:bg-stone-900 shadow-sm">
                   <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
-                    <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'rank')}>
+                    <th className="px-8 py-3 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'rank')}>
                       <div className="flex items-center gap-1">
                         Pos {leaderboardSort.key === 'rank' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
-                    <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'displayName')}>
+                    <th className="px-8 py-3 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'displayName')}>
                       <div className="flex items-center gap-1">
                         Player {leaderboardSort.key === 'displayName' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
-                    <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'points')}>
+                    <th className="px-8 py-3 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'points')}>
                       <div className="flex items-center justify-center gap-1">
                         Points {leaderboardSort.key === 'points' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
-                    <th className="px-8 py-4 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'marginError')}>
+                    <th className="px-8 py-3 font-medium text-center cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('leaderboard', 'marginError')}>
                       <div className="flex items-center justify-center gap-1">
                         Margin Error {leaderboardSort.key === 'marginError' && (leaderboardSort.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
-                    <th className="px-8 py-4 font-medium text-center">Form</th>
+                    <th className="px-8 py-3 font-medium text-center">Form</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3387,7 +3864,7 @@ Good luck everyone! 🍀`;
                             isExpanded && "bg-stone-100 dark:bg-stone-800/80"
                           )}
                         >
-                          <td className="px-8 py-6 font-serif italic text-xl text-stone-300 dark:text-stone-700 relative">
+                          <td className="px-8 py-3 font-serif italic text-xl text-stone-300 dark:text-stone-700 relative">
                             {u.favoriteTeam && (
                               <div 
                                 className="absolute left-0 top-0 bottom-0 w-1 opacity-60 group-hover:opacity-100 transition-opacity"
@@ -3407,7 +3884,7 @@ Good luck everyone! 🍀`;
                               )}
                             </div>
                           </td>
-                          <td className="px-8 py-6">
+                          <td className="px-8 py-3">
                             <div className="flex items-center gap-3">
                               <div 
                                 className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold transition-all relative overflow-hidden"
@@ -3440,18 +3917,18 @@ Good luck everyone! 🍀`;
                               </div>
                             </div>
                           </td>
-                          <td className="px-8 py-6 text-center">
+                          <td className="px-8 py-3 text-center">
                             <span 
-                              className="text-2xl font-serif font-bold"
-                              style={{ color: accentColor }}
+                              className="inline-flex items-center justify-center bg-stone-950 dark:bg-stone-800 text-white font-bold text-base px-3 py-1 rounded-xl shadow-md border border-stone-800 dark:border-stone-700 min-w-[40px]"
+                              style={{ fontFamily: 'Arial, Helvetica, sans-serif' }}
                             >
                               {u.calculatedPoints}
                             </span>
                           </td>
-                          <td className="px-8 py-6 text-center">
+                          <td className="px-8 py-3 text-center">
                             <span className="text-lg font-mono text-stone-500 dark:text-stone-400">{u.calculatedMargin}</span>
                           </td>
-                          <td className="px-8 py-6">
+                          <td className="px-8 py-3">
                             <div className="flex items-center justify-center gap-1">
                               {u.form?.map((result, idx) => (
                                 <div 
@@ -3604,6 +4081,166 @@ Good luck everyone! 🍀`;
           </div>
         )}
 
+        {activeTab === 'fixtures' && (
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl overflow-hidden">
+              <div className="p-6 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50">
+                <div className="flex flex-col gap-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-3xl font-serif italic dark:text-stone-100 text-stone-900">2026 Season Fixtures</h2>
+                      <p className="text-[10px] text-stone-400 uppercase tracking-[0.2em] font-mono mt-1">Official AFL Schedule & Match Details</p>
+                    </div>
+                  </div>
+                  
+                  {/* Horizontal Round Slider */}
+                  <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-2 px-2 scroll-smooth">
+                    {Array.from({ length: 24 }, (_, i) => i + 1).map(r => (
+                      <button
+                        key={r}
+                        id={`fixture-round-btn-${r}`}
+                        onClick={() => setFixturesSelectedRound(r)}
+                        className={cn(
+                          "flex-none px-5 py-2 rounded-xl text-xs font-bold transition-all border whitespace-nowrap",
+                          fixturesSelectedRound === r
+                            ? "bg-afl-navy border-afl-navy text-white shadow-lg shadow-afl-navy/20 scale-105"
+                            : "bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 text-stone-500 hover:border-stone-300 dark:hover:border-stone-700"
+                        )}
+                      >
+                        Round {r}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Range Slider for quick navigation */}
+                  <div className="pt-2">
+                    <input 
+                      type="range" 
+                      min="1" 
+                      max="24" 
+                      value={fixturesSelectedRound} 
+                      onChange={(e) => setFixturesSelectedRound(parseInt(e.target.value))}
+                      className="w-full h-1 bg-stone-200 dark:bg-stone-800 rounded-lg appearance-none cursor-pointer accent-afl-navy dark:accent-afl-gold"
+                    />
+                    <div className="flex justify-between mt-2 text-[9px] font-mono text-stone-400 font-bold uppercase tracking-widest px-1">
+                      <span>R1</span>
+                      <span className="text-afl-navy dark:text-afl-gold">Round {fixturesSelectedRound}</span>
+                      <span>R24</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4">
+                <div className="grid grid-cols-1 gap-2">
+                  {games.filter(g => g.round === fixturesSelectedRound).length === 0 ? (
+                    <div className="py-20 text-center">
+                      <Calendar className="w-12 h-12 text-stone-200 dark:text-stone-800 mx-auto mb-4" />
+                      <p className="text-stone-400 italic">No matches scheduled for Round {fixturesSelectedRound} yet.</p>
+                    </div>
+                  ) : (
+                    games.filter(g => g.round === fixturesSelectedRound).map((game) => {
+                      const isLive = new Date() > new Date(game.date) && !game.isFinished;
+                      const hasStarted = new Date() > new Date(game.date);
+                      
+                      return (
+                        <div 
+                          key={game.id} 
+                          className={cn(
+                            "group p-3 rounded-2xl border transition-all duration-300",
+                            isLive 
+                              ? "bg-red-50/30 dark:bg-red-950/20 border-red-100 dark:border-red-900/50 shadow-lg shadow-red-500/5" 
+                              : "bg-white dark:bg-stone-900 border-stone-100 dark:border-stone-800 hover:border-afl-accent/30 hover:shadow-xl hover:shadow-stone-200/50 dark:hover:shadow-none"
+                          )}
+                        >
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                            <div className="flex-1 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6">
+                              {/* Meta Info */}
+                              <div className="flex flex-row sm:flex-col items-center sm:items-start gap-3 sm:gap-0 sm:w-28">
+                                <p className="text-xs sm:text-sm font-bold text-stone-900 dark:text-stone-100">
+                                  {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'EEE d MMM')}
+                                </p>
+                                <p className="text-[10px] sm:text-[11px] text-stone-500 font-mono">
+                                  {safeFormatInTimeZone(game.date, AWST_TIMEZONE, 'h:mm a')} AWST
+                                </p>
+                                <div className="flex items-center gap-1 text-[9px] text-stone-400">
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  <span className="truncate">{game.venue}</span>
+                                </div>
+                              </div>
+
+                              {/* Matchup */}
+                              <div className="flex-1 flex items-center justify-between sm:justify-start gap-4 sm:gap-6">
+                                <div className="flex flex-col items-end sm:items-center gap-1 sm:w-32 text-right sm:text-center">
+                                  <div 
+                                    className="w-24 h-8 sm:w-28 sm:h-10 rounded-xl shadow-sm flex items-center justify-center px-2 text-white font-bold text-[8px] sm:text-[10px] text-center leading-tight transition-transform group-hover:scale-105"
+                                    style={{ backgroundColor: AFL_TEAM_COLORS[game.hometeam] || '#ccc' }}
+                                  >
+                                    {game.hometeam}
+                                  </div>
+                                  {hasStarted && (
+                                    <span className="text-xl font-serif italic text-stone-900 dark:text-stone-100">{game.hscore ?? '-'}</span>
+                                  )}
+                                </div>
+
+                                <div className="flex flex-col items-center">
+                                   <div className={cn(
+                                     "px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest",
+                                     isLive ? "bg-red-500 text-white animate-pulse" : "bg-stone-100 dark:bg-stone-800 text-stone-400"
+                                   )}>
+                                     {game.isFinished ? 'Final' : isLive ? 'Live' : 'VS'}
+                                   </div>
+                                </div>
+
+                                <div className="flex flex-col items-start sm:items-center gap-1 sm:w-32 text-left sm:text-center">
+                                  <div 
+                                    className="w-24 h-8 sm:w-28 sm:h-10 rounded-xl shadow-sm flex items-center justify-center px-2 text-white font-bold text-[8px] sm:text-[10px] text-center leading-tight transition-transform group-hover:scale-105"
+                                    style={{ backgroundColor: AFL_TEAM_COLORS[game.awayteam] || '#ccc' }}
+                                  >
+                                    {game.awayteam}
+                                  </div>
+                                  {hasStarted && (
+                                    <span className="text-xl font-serif italic text-stone-900 dark:text-stone-100">{game.ascore ?? '-'}</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Actions / Status */}
+                            <div className="flex flex-row lg:flex-col items-center justify-between lg:justify-center gap-2 border-t lg:border-t-0 lg:border-l border-stone-100 dark:border-stone-800 pt-2 lg:pt-0 lg:pl-6">
+                               {game.isFinished ? (
+                                 <div className="flex flex-col items-end lg:items-center">
+                                   <span className="text-[8px] text-emerald-500 font-bold uppercase tracking-widest leading-tight">Winner</span>
+                                   <span className="text-xs font-bold text-stone-900 dark:text-stone-100">{game.winner || 'Draw'}</span>
+                                 </div>
+                               ) : (
+                                 <button 
+                                   onClick={() => setActiveTab('war-room')}
+                                   className="px-4 py-1.5 bg-afl-navy text-white text-[9px] font-bold uppercase tracking-widest rounded-lg hover:bg-afl-navy/90 transition-all shadow-md active:scale-95"
+                                 >
+                                   Tip Now
+                                 </button>
+                               )}
+                               
+                               <div className="flex items-center gap-2">
+                                 <div className="flex flex-col items-center">
+                                   <span className="text-[7px] text-stone-400 uppercase font-black leading-none">Ref</span>
+                                   <span className="text-[9px] font-mono text-stone-500">#{game.id}</span>
+                                 </div>
+                               </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+          </div>
+        )}
+
         {activeTab === 'standings' && (
           <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-xl overflow-hidden transition-colors">
             <div className="p-8 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50">
@@ -3721,6 +4358,28 @@ Good luck everyone! 🍀`;
                     )}
                   </div>
 
+                  <button 
+                    onClick={() => setShowMatchWinners(prev => !prev)}
+                    className={cn(
+                      "flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-sm",
+                      showMatchWinners 
+                        ? "bg-white/5 text-white/90 border-white/10 hover:border-white/20" 
+                        : "bg-amber-500/20 text-amber-200 border-amber-500/40 hover:bg-amber-500/30"
+                    )}
+                  >
+                    {showMatchWinners ? (
+                      <>
+                        <Eye className="w-4 h-4 text-emerald-400" />
+                        <span>Winners Shown</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-4 h-4 text-amber-400" />
+                        <span>Self-Test Active</span>
+                      </>
+                    )}
+                  </button>
+
                   {resultsSubTab === 'round-summary' && (
                     <button 
                       onClick={() => {
@@ -3769,8 +4428,196 @@ Good luck everyone! 🍀`;
                   <p className="text-stone-500 dark:text-stone-400 font-serif italic">No completed rounds yet.</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
+                <div className="space-y-6">
+                  {resultsChartData.length > 0 && (
+                    <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-100 dark:border-stone-800 p-6 shadow-sm">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2.5 rounded-2xl bg-stone-50 dark:bg-stone-800 border border-stone-100 dark:border-stone-700/80 text-afl-accent shadow-sm">
+                            <TrendingUp className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">
+                              Tipping Performance
+                            </h3>
+                            <p className="text-lg font-serif italic text-stone-900 dark:text-stone-100">
+                              Success Trajectory Over Rounds
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Summary Metrics */}
+                        <div className="flex items-center gap-6 self-start sm:self-center">
+                          <div className="text-left">
+                            <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400 block">Avg Correct</span>
+                            <span className="text-lg font-bold text-stone-900 dark:text-stone-100 font-mono">
+                              {(resultsChartData.reduce((acc, curr) => acc + curr["Correct Tips"], 0) / (resultsChartData.length || 1)).toFixed(1)}
+                            </span>
+                          </div>
+                          <div className="text-left border-l border-stone-100 dark:border-stone-800 pl-6">
+                            <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400 block">Best Round</span>
+                            <span className="text-lg font-bold text-emerald-500 font-mono">
+                              {Math.max(...resultsChartData.map(d => d["Correct Tips"]), 0)}
+                            </span>
+                          </div>
+                          <div className="text-left border-l border-stone-100 dark:border-stone-800 pl-6">
+                            <span className="text-[10px] uppercase font-mono tracking-wider text-stone-400 block">Total Matches</span>
+                            <span className="text-lg font-bold text-stone-500 font-mono font-bold">
+                              {resultsChartData.reduce((acc, curr) => acc + (curr["Total Games"] || 0), 0)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Line Chart Range Selector */}
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-t border-stone-100 dark:border-stone-800/60 pt-4 mb-6 gap-3">
+                        <span className="text-xs text-stone-500 dark:text-stone-400 font-medium">Select chart range:</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex bg-stone-100 dark:bg-stone-800/80 p-1 rounded-2xl border border-stone-200/40 dark:border-stone-800/65 shadow-inner">
+                            <button
+                              onClick={() => setResultsChartRange('5')}
+                              className={cn(
+                                "px-4 py-1.5 rounded-xl text-[11px] font-bold transition-all",
+                                resultsChartRange === '5'
+                                  ? "bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-sm"
+                                  : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-300"
+                              )}
+                            >
+                              Last 5 Rounds
+                            </button>
+                            <button
+                              onClick={() => setResultsChartRange('10')}
+                              className={cn(
+                                "px-4 py-1.5 rounded-xl text-[11px] font-bold transition-all",
+                                resultsChartRange === '10'
+                                  ? "bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-sm"
+                                  : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-300"
+                              )}
+                            >
+                              Last 10 Rounds
+                            </button>
+                            <button
+                              onClick={() => setResultsChartRange('all')}
+                              className={cn(
+                                "px-4 py-1.5 rounded-xl text-[11px] font-bold transition-all",
+                                resultsChartRange === 'all'
+                                  ? "bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-sm"
+                                  : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-300"
+                              )}
+                            >
+                              All Rounds
+                            </button>
+                          </div>
+
+                          {resultsChartRange !== 'all' && (
+                            <button
+                              onClick={() => setResultsChartRange('all')}
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-2xl text-[11px] font-bold text-stone-500 hover:text-stone-800 dark:hover:text-stone-300 border border-stone-200/60 dark:border-stone-800/80 bg-white dark:bg-stone-900 hover:bg-stone-50 dark:hover:bg-stone-800/50 shadow-sm transition-all"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              Reset Zoom
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {!showMatchWinners ? (
+                          <div className="w-full h-[280px] bg-stone-50/50 dark:bg-stone-900/10 rounded-3xl border border-stone-100/80 dark:border-stone-800/60 flex flex-col items-center justify-center p-6 text-center shadow-inner">
+                            <div className="w-12 h-12 rounded-full bg-amber-500/15 text-amber-500 flex items-center justify-center mb-3 border border-amber-500/25 shadow-sm">
+                              <EyeOff className="w-5 h-5" />
+                            </div>
+                            <h4 className="font-serif italic text-lg text-stone-900 dark:text-stone-100">Performance Chart Hidden</h4>
+                            <p className="text-xs text-stone-550 dark:text-stone-400 mt-1 max-w-sm">
+                              Trajectory totals are hidden in Self-Test Mode to prevent giveaways. Click "Self-Test Active" in the tab header to reveal your performance trajectory!
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="w-full h-[280px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart
+                                key={resultsUserId || 'me'}
+                                data={resultsChartData}
+                                margin={{ top: 24, right: 15, left: -25, bottom: 0 }}
+                              >
+                                  <CartesianGrid 
+                                    strokeDasharray="3 3" 
+                                    vertical={false} 
+                                    stroke="rgba(120, 110, 100, 0.08)" 
+                                  />
+                                  <XAxis 
+                                    dataKey="name" 
+                                    stroke="#a8a29e" 
+                                    fontSize={10} 
+                                    tickLine={false}
+                                    axisLine={false}
+                                    dy={10}
+                                  />
+                                  <YAxis 
+                                    stroke="#a8a29e" 
+                                    fontSize={10} 
+                                    tickLine={false}
+                                    axisLine={false}
+                                    allowDecimals={false}
+                                    domain={[0, 'auto']}
+                                  />
+                                  <RechartsTooltip 
+                                    content={({ active, payload, label }: any) => {
+                                      if (active && payload && payload.length) {
+                                        const change = payload[0].payload["Change"];
+                                        return (
+                                          <div className="bg-white dark:bg-stone-900 border border-stone-200/60 dark:border-stone-800/80 p-4 rounded-2xl shadow-xl space-y-1.5 backdrop-blur-md text-left z-30">
+                                            <p className="text-[10px] font-mono font-bold text-stone-400 uppercase tracking-widest">{label}</p>
+                                            <div className="flex items-center justify-between gap-6 py-0.5">
+                                              <p className="text-sm font-bold text-stone-950 dark:text-stone-50 flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: accentColor }} />
+                                                <span>Correct:</span>
+                                                <span className="font-mono text-emerald-500">{payload[0].value} / {payload[0].payload["Total Games"]}</span>
+                                              </p>
+                                              {change !== null && (
+                                                <span className={cn(
+                                                  "text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-lg flex items-center gap-0.5 shadow-sm",
+                                                  change > 0 && "text-emerald-700 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/30 border border-emerald-100/50 dark:border-emerald-900/30",
+                                                  change < 0 && "text-rose-700 bg-rose-50 dark:text-rose-400 dark:bg-rose-950/30 border border-rose-100/50 dark:border-rose-900/30",
+                                                  change === 0 && "text-stone-600 bg-stone-50 dark:text-stone-450 dark:bg-stone-800/60 border border-stone-200/50 dark:border-stone-700/50"
+                                                )}>
+                                                  {change > 0 && <ChevronUp className="w-3 h-3 stroke-[3.5]" />}
+                                                  {change < 0 && <ChevronDown className="w-3 h-3 stroke-[3.5]" />}
+                                                  {change === 0 && <span className="text-[8px] font-bold tracking-tight px-0.5">—</span>}
+                                                  {change !== 0 && (change > 0 ? `+${change}` : change)}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="pt-1.5 border-t border-stone-100 dark:border-stone-855 text-[10px] text-stone-400 font-mono flex gap-4 justify-between">
+                                              <span>Points: <span className="font-bold text-stone-600 dark:text-stone-300">{payload[0].payload["Points"]}</span></span>
+                                              <span>Margin Error: <span className="font-bold text-stone-600 dark:text-stone-300">{payload[0].payload["Margin"]}</span></span>
+                                            </div>
+                                          </div>
+                                        );
+                                      }
+                                      return null;
+                                    }}
+                                  />
+                                  <Line
+                                    type="monotone"
+                                    dataKey="Correct Tips"
+                                    stroke={accentColor}
+                                    strokeWidth={3}
+                                    activeDot={{ r: 6, strokeWidth: 0, fill: accentColor }}
+                                    dot={{ r: 4, strokeWidth: 2, stroke: accentColor, fill: '#ffffff' }}
+                                    label={{ position: 'top', offset: 10, fill: accentColor, fontSize: 11, fontWeight: 'bold' }}
+                                    isAnimationActive={true}
+                                    animationDuration={1200}
+                                    animationEasing="ease-out"
+                                  />
+                                </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                    </div>
+                  )}
+
+                  <div className="overflow-x-auto shadow-sm rounded-3xl border border-stone-100 dark:border-stone-800">
+                    <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="text-[10px] uppercase tracking-widest text-stone-400 font-mono border-b border-stone-100 dark:border-stone-800">
                         <th className="px-8 py-4 font-medium cursor-pointer hover:text-afl-accent transition-colors" onClick={() => handleSort('individual', 'round')}>
@@ -3883,7 +4730,11 @@ Good luck everyone! 🍀`;
                                                 </span>
                                                 {game.isFinished ? (
                                                   tip ? (
-                                                    isCorrect ? (
+                                                    !showMatchWinners ? (
+                                                      <div className="flex items-center gap-1 text-amber-500/80 text-[10px] font-bold uppercase tracking-tighter" title="Results masked under Self-Test Mode">
+                                                        <EyeOff className="w-3 h-3 text-amber-400" /> Masked (Self-Test)
+                                                      </div>
+                                                    ) : isCorrect ? (
                                                       <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-tighter">
                                                         <CheckCircle2 className="w-3 h-3" /> Correct
                                                       </div>
@@ -3909,19 +4760,27 @@ Good luck everyone! 🍀`;
                                                 <div className="flex-1 space-y-2">
                                                   <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.hometeam ? 'bg-white/20 border border-white' : ''}`}>
                                                     <div className="flex items-center gap-2">
-                                                      <span className={`text-xs font-bold ${game.winner === game.hometeam ? 'text-white underline decoration-afl-gold underline-offset-4' : 'text-stone-300'}`} style={{ fontFamily: 'Arial, sans-serif' }}>
+                                                      <span className={`text-xs font-bold ${(!showMatchWinners) ? 'text-white font-bold' : (game.winner === game.hometeam ? 'text-white underline decoration-afl-gold underline-offset-4' : 'text-stone-300')}`} style={{ fontFamily: 'Arial, sans-serif' }}>
                                                         {game.hometeam}
                                                       </span>
                                                     </div>
-                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold text-white">{game.hscore}</span>}
+                                                    {(game.isFinished || isInProgress) && (
+                                                      <span className="text-sm font-mono font-bold text-white">
+                                                        {showMatchWinners ? game.hscore : '?'}
+                                                      </span>
+                                                    )}
                                                   </div>
                                                   <div className={`flex items-center justify-between p-2 rounded-lg ${tip?.selectedTeam === game.awayteam ? 'bg-white/20 border border-white' : ''}`}>
                                                     <div className="flex items-center gap-2">
-                                                      <span className={`text-xs font-bold ${game.winner === game.awayteam ? 'text-white underline decoration-afl-gold underline-offset-4' : 'text-stone-300'}`} style={{ fontFamily: 'Arial, sans-serif' }}>
+                                                      <span className={`text-xs font-bold ${(!showMatchWinners) ? 'text-white font-bold' : (game.winner === game.awayteam ? 'text-white underline decoration-afl-gold underline-offset-4' : 'text-stone-300')}`} style={{ fontFamily: 'Arial, sans-serif' }}>
                                                         {game.awayteam}
                                                       </span>
                                                     </div>
-                                                    {(game.isFinished || isInProgress) && <span className="text-sm font-mono font-bold text-white">{game.ascore}</span>}
+                                                    {(game.isFinished || isInProgress) && (
+                                                      <span className="text-sm font-mono font-bold text-white">
+                                                        {showMatchWinners ? game.ascore : '?'}
+                                                      </span>
+                                                    )}
                                                   </div>
                                                 </div>
                                                 
@@ -3967,7 +4826,8 @@ Good luck everyone! 🍀`;
                     </tbody>
                   </table>
                 </div>
-              )) : (
+              </div>
+            )) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
@@ -4049,13 +4909,19 @@ Good luck everyone! 🍀`;
                             </div>
                           </td>
                           <td className="px-8 py-6 text-center">
-                            <span className="text-lg font-bold text-stone-900 dark:text-stone-100">{u.correct}</span>
+                            <span className="text-lg font-bold text-stone-900 dark:text-stone-100">
+                              {showMatchWinners ? u.correct : '?'}
+                            </span>
                           </td>
                           <td className="px-8 py-6 text-center bg-stone-50/30 dark:bg-stone-900/30">
-                            <span className="text-3xl font-serif font-bold text-afl-accent drop-shadow-sm">{u.points}</span>
+                            <span className="text-3xl font-serif font-bold text-afl-accent drop-shadow-sm">
+                              {showMatchWinners ? u.points : '?'}
+                            </span>
                           </td>
                           <td className="px-8 py-6 text-center">
-                            <span className="text-lg font-mono text-stone-500 dark:text-stone-400">{u.marginError}</span>
+                            <span className="text-lg font-mono text-stone-500 dark:text-stone-400">
+                              {showMatchWinners ? u.marginError : '—'}
+                            </span>
                           </td>
                         </tr>
                       ))}
@@ -4080,13 +4946,13 @@ Good luck everyone! 🍀`;
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4 scroll-smooth bg-stone-50/20 dark:bg-stone-900/20">
-              {messages.length === 0 ? (
+              {messages.filter(m => !m.toUid).length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-stone-400 space-y-4">
                   <MessageSquare className="w-12 h-12 opacity-20" />
                   <p className="font-serif italic">No messages yet. Be the first to post!</p>
                 </div>
               ) : (
-                messages.map((msg) => {
+                messages.filter(m => !m.toUid).map((msg) => {
                   const isMine = msg.uid === user?.uid;
                   const profileUser = allUsers.find(u => u.uid === msg.uid);
                   return (
@@ -4564,6 +5430,89 @@ Good luck everyone! 🍀`;
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Player Message Wall */}
+                  <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200 dark:border-stone-800 p-8 shadow-sm space-y-6">
+                    <div className="flex items-center gap-3">
+                      <MessageSquare className="w-5 h-5 text-afl-accent" />
+                      <h3 className="text-sm font-bold uppercase tracking-widest text-stone-400">
+                        {profileUser.uid === user?.uid ? "Your Player Wall" : `${profileUser.displayName}'s Player Wall`}
+                      </h3>
+                    </div>
+
+                    {/* Messages List */}
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                      {messages.filter(m => m.toUid === profileUser.uid).length === 0 ? (
+                        <p className="text-sm text-stone-500 italic font-serif py-2">No messages posted on this wall yet.</p>
+                      ) : (
+                        messages.filter(m => m.toUid === profileUser.uid).map((msg) => {
+                          const isMine = msg.uid === user?.uid;
+                          const senderProfile = allUsers.find(u => u.uid === msg.uid);
+                          return (
+                            <div key={msg.id} className="flex gap-3 text-left">
+                              <div 
+                                className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] text-white font-bold shadow-sm"
+                                style={{ backgroundColor: senderProfile?.favoriteTeam && AFL_TEAM_COLORS[senderProfile.favoriteTeam] ? AFL_TEAM_COLORS[senderProfile.favoriteTeam] : '#141414' }}
+                              >
+                                {msg.displayName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="space-y-1 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-stone-900 dark:text-stone-100">{msg.displayName}</span>
+                                  <span className="text-[10px] font-mono text-stone-400">{formatRelativeTime(msg.createdAt)}</span>
+                                </div>
+                                <div className="px-4 py-2.5 rounded-2xl text-xs shadow-sm border bg-stone-50/50 dark:bg-stone-800/50 border-stone-150 dark:border-stone-800/80 text-stone-900 dark:text-stone-100">
+                                  {msg.text}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <button 
+                                    onClick={() => toggleLike(msg.id, msg.likes)}
+                                    className={cn(
+                                      "flex items-center gap-1 text-[9px] font-bold transition-colors",
+                                      msg.likes?.includes(user?.uid || '') 
+                                        ? "text-red-500" 
+                                        : "text-stone-400 hover:text-red-400"
+                                    )}
+                                  >
+                                    <Heart className={cn("w-3 h-3", msg.likes?.includes(user?.uid || '') && "fill-current")} />
+                                    {msg.likes?.length || 0}
+                                  </button>
+                                  {(isMine || profileUser.uid === user?.uid || profile?.role === 'admin') && (
+                                    <button 
+                                      onClick={() => deleteMessage(msg.id)}
+                                      className="text-[9px] font-bold text-stone-400 hover:text-red-500 transition-colors"
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Send Message Form */}
+                    <form onSubmit={(e) => postProfileMessage(e, profileUser.uid, profileUser.displayName)} className="pt-4 border-t border-stone-100 dark:border-stone-800 flex gap-3">
+                      <input 
+                        type="text" 
+                        value={profileNewMessage}
+                        onChange={(e) => setProfileNewMessage(e.target.value)}
+                        placeholder={profileUser.uid === user?.uid ? "Write something on your own wall..." : `Say something to ${profileUser.displayName}...`}
+                        className="flex-1 bg-stone-50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-700 p-3 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-afl-accent text-stone-900 dark:text-stone-100 placeholder:text-stone-400"
+                        disabled={isSendingProfileMessage}
+                      />
+                      <button 
+                        type="submit"
+                        disabled={isSendingProfileMessage || !profileNewMessage.trim()}
+                        className="px-6 py-3 bg-afl-navy text-white rounded-2xl text-xs font-bold hover:bg-afl-navy/90 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                      >
+                        {isSendingProfileMessage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                        <span>Post</span>
+                      </button>
+                    </form>
                   </div>
                 </div>
               );

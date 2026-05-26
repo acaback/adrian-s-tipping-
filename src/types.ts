@@ -66,4 +66,15 @@ export interface Message {
   text: string;
   createdAt: string;
   likes?: string[];
+  toUid?: string;
+  toDisplayName?: string;
+}
+
+export interface PollVote {
+  id: string;
+  gameId: number;
+  uid: string;
+  vote: 'home' | 'away';
+  round: number;
+  createdAt: string;
 }
