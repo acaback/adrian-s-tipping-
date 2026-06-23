@@ -35,7 +35,6 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
 
   public render() {
     const { hasError, error } = this.state;
-    const { children } = this.props;
 
     if (hasError) {
       let errorMessage = "Something went wrong.";
@@ -86,6 +85,6 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
       );
     }
 
-    return children;
+    return this.props.children;
   }
 }

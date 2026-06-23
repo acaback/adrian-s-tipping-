@@ -142,10 +142,11 @@ async function startServer() {
 
     app.get("/api/games", async (req, res) => {
       const year = req.query.year || "2026";
+      const forceRef = req.query.force === "true";
       const cacheKey = `games-${year}`;
       const cached = cache.get(cacheKey);
 
-      if (cached && Date.now() - cached.timestamp < GAMES_CACHE_TTL) {
+      if (!forceRef && cached && Date.now() - cached.timestamp < GAMES_CACHE_TTL) {
         console.log(`Returning cached games for ${year}`);
         return res.json(cached.data);
       }
@@ -211,10 +212,11 @@ async function startServer() {
 
     app.get("/api/standings", async (req, res) => {
       const year = req.query.year || "2026";
+      const forceRef = req.query.force === "true";
       const cacheKey = `standings-${year}`;
       const cached = cache.get(cacheKey);
 
-      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      if (!forceRef && cached && Date.now() - cached.timestamp < CACHE_TTL) {
         console.log(`Returning cached standings for ${year}`);
         return res.json(cached.data);
       }
